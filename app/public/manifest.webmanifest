@@ -1,0 +1,17 @@
+{
+  "name": "Souvenir",
+  "short_name": "Souvenir",
+  "description": "A private local-media gallery for Meta Quest passthrough.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b1113",
+  "theme_color": "#111a1d",
+  "icons": [
+    {
+      "src": "/assets/mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

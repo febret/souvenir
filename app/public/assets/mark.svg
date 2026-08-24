@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Souvenir">
+  <defs>
+    <linearGradient id="a" x1="10" y1="8" x2="54" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#BFFBD3"/>
+      <stop offset="1" stop-color="#66D998"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="17" fill="#17231F"/>
+  <path d="M17 19.5A4.5 4.5 0 0 1 21.5 15h21a4.5 4.5 0 0 1 4.5 4.5v25a4.5 4.5 0 0 1-4.5 4.5h-21a4.5 4.5 0 0 1-4.5-4.5v-25Z" fill="none" stroke="url(#a)" stroke-width="3"/>
+  <circle cx="38.5" cy="24.5" r="4.5" fill="#A7F2C0"/>
+  <path d="m21 43 8.4-11 5.5 6 4-4.2L45 43H21Z" fill="url(#a)" opacity=".9"/>
+</svg>

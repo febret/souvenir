@@ -1,0 +1,10 @@
+node_modules/
+app/dist/
+.pytest_cache/
+test-results/
+playwright-report/
+__pycache__/
+*.py[cod]
+.souvenir-certs/
+.souvenir-thumbnails/
+.vscode/settings.json

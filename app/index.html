@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#111a1d" />
+    <meta name="description" content="A private, local-media gallery for Meta Quest 3 passthrough." />
+    <link rel="icon" href="/assets/mark.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <title>Souvenir · Local media in your space</title>
+  </head>
+  <body>
+    <main id="home" class="home">
+      <header class="title-bar">
+        <div class="brand">
+          <img src="/assets/mark.svg" width="42" height="42" alt="" />
+          <div>
+            <h1>Souvenir</h1>
+            <p>Private media, at home in your space</p>
+          </div>
+        </div>
+        <span id="connection-status" class="status-pill" role="status">Preparing library</span>
+        <div class="launch-actions" aria-label="Open Souvenir">
+          <button id="browse-button" class="secondary-button" type="button" disabled>
+            Browse mode
+          </button>
+          <button id="tagging-button" class="secondary-button" type="button" disabled>
+            Tagging mode
+          </button>
+          <button id="preview-button" class="secondary-button" type="button" disabled>
+            Desktop preview
+          </button>
+          <button id="launch-button" class="primary-button" type="button" disabled>
+            <span>Enter passthrough</span>
+            <span aria-hidden="true">↗</span>
+          </button>
+        </div>
+        <p id="xr-support" class="xr-support">Checking immersive AR support…</p>
+      </header>
+
+      <form id="configuration" class="configuration">
+        <section
+          id="library-card"
+          class="setting-card library-card"
+          aria-labelledby="library-heading"
+          aria-busy="true"
+        >
+          <div class="section-heading">
+            <div>
+              <p class="panel-kicker">LIBRARY</p>
+              <h3 id="library-heading">Choose folders</h3>
+              <p>Only selected folders appear in your spatial media browser.</p>
+            </div>
+            <div class="section-actions">
+              <button id="select-all" class="text-button" type="button" disabled>Select all</button>
+              <button
+                class="panel-size-toggle"
+                type="button"
+                data-panel-size-toggle
+                aria-controls="library-card"
+                aria-label="Maximize Library panel"
+                aria-pressed="false"
+              >
+                <span aria-hidden="true">⤢</span>
+              </button>
+            </div>
+          </div>
+          <div id="library-progress" class="library-progress" role="status" aria-live="polite" aria-atomic="true">
+            <p id="library-progress-status" class="progress-title">Preparing your library</p>
+            <div
+              id="library-progress-bar"
+              class="scan-progress"
+              role="progressbar"
+              aria-label="Library scanning progress"
+              aria-valuemin="0"
+              aria-valuetext="Preparing your library"
+            >
+              <span aria-hidden="true"></span>
+            </div>
+            <p id="library-progress-counts" class="progress-counts">Waiting for the media server…</p>
+            <p id="library-progress-path" class="progress-path" hidden></p>
+          </div>
+          <div id="directory-state" class="inline-state" role="status" hidden></div>
+          <div id="directory-tree" class="directory-tree" aria-label="Media folders"></div>
+        </section>
+
+        <section id="playback-card" class="setting-card playback-card" aria-labelledby="playback-heading">
+          <div class="section-heading">
+            <div>
+              <p class="panel-kicker">PLAYBACK</p>
+              <h3 id="playback-heading">Set the rhythm</h3>
+            </div>
+            <div class="section-actions">
+              <button
+                class="panel-size-toggle"
+                type="button"
+                data-panel-size-toggle
+                aria-controls="playback-card"
+                aria-label="Maximize Playback panel"
+                aria-pressed="false"
+              >
+                <span aria-hidden="true">⤢</span>
+              </button>
+            </div>
+          </div>
+
+          <label class="toggle-row" for="autoplay">
+            <span>
+              <strong>Autoplay videos</strong>
+              <small>Start videos as soon as you open them.</small>
+            </span>
+            <span class="switch">
+              <input id="autoplay" name="autoplay" type="checkbox" />
+              <span aria-hidden="true"></span>
+            </span>
+          </label>
+
+          <label class="range-row" for="slideshow-speed">
+            <span>
+              <strong>Image duration</strong>
+              <small>Videos always play through before the next slide.</small>
+            </span>
+            <output id="slideshow-value" for="slideshow-speed">8 sec</output>
+          </label>
+          <input
+            id="slideshow-speed"
+            name="slideshowSpeed"
+            type="range"
+            min="3"
+            max="30"
+            step="1"
+            value="8"
+          />
+        </section>
+
+        <section
+          id="tags-card"
+          class="setting-card tags-card"
+          aria-labelledby="tags-heading"
+          aria-busy="true"
+        >
+          <div class="section-heading">
+            <div>
+              <p class="panel-kicker">TAGS</p>
+              <h3 id="tags-heading">Organize shared tags</h3>
+              <p>Tags are shared by every panel and make filtering your memories easy.</p>
+            </div>
+            <div class="section-actions">
+              <button id="retry-tags" class="text-button" type="button" hidden>Retry</button>
+              <button
+                class="panel-size-toggle"
+                type="button"
+                data-panel-size-toggle
+                aria-controls="tags-card"
+                aria-label="Maximize Tags panel"
+                aria-pressed="false"
+              >
+                <span aria-hidden="true">⤢</span>
+              </button>
+            </div>
+          </div>
+          <div class="tag-add-row">
+            <label class="visually-hidden" for="tag-name">New tag name</label>
+            <input
+              id="tag-name"
+              name="tagName"
+              type="text"
+              maxlength="80"
+              autocomplete="off"
+              placeholder="e.g. Summer trip"
+              disabled
+            />
+            <button id="add-tag" class="secondary-button" type="button" disabled>Add</button>
+          </div>
+          <div class="tag-sort-row">
+            <label for="tag-sort-order">Sort tags</label>
+            <select id="tag-sort-order" name="tagSortOrder" disabled>
+              <option value="alpha-asc">Alphabetical (A-Z)</option>
+              <option value="alpha-desc">Alphabetical (Z-A)</option>
+            </select>
+          </div>
+          <p id="tag-state" class="tag-state" role="status" aria-live="polite" aria-atomic="true">
+            Tags will be available after the library scan completes.
+          </p>
+          <p id="tag-error" class="tag-error" role="alert" hidden></p>
+          <div id="tag-list" class="tag-list" role="list" aria-label="Shared tags"></div>
+        </section>
+
+        <section
+          id="commentary-card"
+          class="setting-card commentary-card"
+          aria-labelledby="commentary-heading"
+          aria-busy="true"
+        >
+          <div class="section-heading">
+            <div>
+              <p class="panel-kicker">COMMENTARY</p>
+              <h3 id="commentary-heading">Listen to your notes</h3>
+              <p>Private audio commentary stays alongside your gallery.</p>
+            </div>
+            <div class="section-actions">
+              <button id="retry-commentary" class="text-button" type="button" hidden>Retry</button>
+              <button
+                class="panel-size-toggle"
+                type="button"
+                data-panel-size-toggle
+                aria-controls="commentary-card"
+                aria-label="Maximize Commentary panel"
+                aria-pressed="false"
+              >
+                <span aria-hidden="true">⤢</span>
+              </button>
+            </div>
+          </div>
+          <p id="commentary-state" class="commentary-state" role="status" aria-live="polite">
+            Loading commentary…
+          </p>
+          <p id="commentary-error" class="commentary-error" role="alert" hidden></p>
+          <div class="commentary-suggest-row">
+            <button id="suggest-commentary-tags" class="secondary-button" type="button" disabled>
+              Suggest commentary tags
+            </button>
+            <p id="commentary-suggest-hint" class="commentary-suggest-hint" role="status" aria-live="polite">
+              Tag coverage is loading.
+            </p>
+          </div>
+          <div class="caption-settings" aria-label="Caption display settings">
+            <label class="caption-setting" for="caption-size">
+              <span><strong>Caption size</strong><small>Scale text in the AR view.</small></span>
+              <output id="caption-size-value" for="caption-size">100%</output>
+              <input id="caption-size" type="range" min="0.5" max="2" step="0.1" value="1" />
+            </label>
+            <label class="caption-setting" for="caption-transparency">
+              <span><strong>Transparency</strong><small>Fade the complete caption card.</small></span>
+              <output id="caption-transparency-value" for="caption-transparency">10%</output>
+              <input id="caption-transparency" type="range" min="0" max="0.8" step="0.05" value="0.1" />
+            </label>
+            <label class="caption-setting" for="caption-distance">
+              <span><strong>Distance</strong><small>Keep captions this far in front of you.</small></span>
+              <output id="caption-distance-value" for="caption-distance">1.2 m</output>
+              <input id="caption-distance" type="range" min="0.5" max="3" step="0.1" value="1.2" />
+            </label>
+          </div>
+          <div
+            id="commentary-filter"
+            class="commentary-filter"
+            aria-label="Filter commentary audio files"
+            hidden
+          ></div>
+          <div id="commentary-list" class="commentary-list" role="list" aria-label="Commentary audio files"></div>
+          <div
+            id="commentary-suggest-popup"
+            class="commentary-suggest-popup"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="commentary-suggest-title"
+            hidden
+          >
+            <div class="commentary-suggest-panel">
+              <header class="commentary-suggest-header">
+                <h4 id="commentary-suggest-title">Suggested tags for new commentary</h4>
+                <button
+                  id="commentary-suggest-close"
+                  class="icon-button"
+                  type="button"
+                  aria-label="Close tag suggestion popup"
+                >×</button>
+              </header>
+              <p id="commentary-suggest-summary" class="commentary-suggest-summary"></p>
+              <ol id="commentary-suggest-list" class="commentary-suggest-list"></ol>
+              <div id="commentary-suggest-distribution" class="commentary-suggest-distribution"></div>
+            </div>
+          </div>
+        </section>
+
+      </form>
+
+      <p id="app-error" class="app-error" role="alert" hidden></p>
+      <footer>
+        <span>Private by design</span>
+        <span>Media never leaves your network</span>
+      </footer>
+    </main>
+
+    <section id="browse-shell" class="browse-shell" hidden aria-label="Souvenir browse mode">
+      <header class="browse-title-bar">
+        <button id="exit-browse" class="icon-button browse-back" type="button" aria-label="Exit browse mode">←</button>
+        <div>
+          <p class="panel-kicker">BROWSE MODE</p>
+          <h2>Souvenir library</h2>
+        </div>
+        <p id="browse-selection-status" class="browse-selection-status" role="status">No media selected</p>
+        <button id="browse-select-all" class="secondary-button compact-button" type="button">Select all</button>
+      </header>
+      <nav id="browse-breadcrumbs" class="browse-breadcrumbs" aria-label="Current media folder"></nav>
+      <div class="browse-toolbar">
+        <label>
+          <span>Sort</span>
+          <select id="browse-sort">
+            <option value="name">Name</option>
+            <option value="mtime">Newest</option>
+            <option value="size">Size</option>
+          </select>
+        </label>
+        <label>
+          <span>Show</span>
+          <select id="browse-type-filter">
+            <option value="all">Images and videos</option>
+            <option value="image">Images</option>
+            <option value="video">Videos</option>
+          </select>
+        </label>
+        <label>
+          <span>Tags applied</span>
+          <select id="browse-tag-count-filter">
+            <option value="all">Any number</option>
+            <option value="0">0 tags</option>
+            <option value="1-2">1–2 tags</option>
+            <option value="3-10">3–10 tags</option>
+            <option value="10+">10+ tags</option>
+          </select>
+        </label>
+        <button id="browse-up" class="secondary-button compact-button" type="button">Up one folder</button>
+        <p id="browse-state" class="browse-state" role="status" aria-live="polite"></p>
+      </div>
+      <div class="browse-workspace">
+        <main id="browse-grid" class="browse-grid" aria-label="Media files"></main>
+        <aside class="browse-tags" aria-labelledby="browse-tags-heading">
+          <div>
+            <p class="panel-kicker">SHARED TAGS</p>
+            <h3 id="browse-tags-heading">Tag selection</h3>
+          </div>
+          <p id="browse-tags-help">Select one or more files to edit their tags.</p>
+          <fieldset id="browse-tag-list" disabled></fieldset>
+          <p id="browse-tag-error" class="browse-error" role="alert" hidden></p>
+        </aside>
+      </div>
+      <div id="browse-viewer" class="browse-viewer" role="dialog" aria-modal="true" aria-labelledby="browse-viewer-title" hidden>
+        <header class="browse-viewer-bar">
+          <button id="browse-viewer-close" class="icon-button" type="button" aria-label="Close media preview">×</button>
+          <h3 id="browse-viewer-title"></h3>
+          <div id="browse-image-controls" class="browse-image-controls">
+            <button id="browse-zoom-out" class="secondary-button compact-button" type="button" aria-label="Zoom out">−</button>
+            <output id="browse-zoom-value">100%</output>
+            <button id="browse-zoom-in" class="secondary-button compact-button" type="button" aria-label="Zoom in">+</button>
+            <button id="browse-fit" class="secondary-button compact-button" type="button">Fit</button>
+          </div>
+        </header>
+        <button id="browse-viewer-prev" class="browse-viewer-nav previous" type="button" aria-label="Previous media">‹</button>
+        <div id="browse-viewer-stage" class="browse-viewer-stage">
+          <img id="browse-viewer-image" alt="" draggable="false" hidden />
+          <video id="browse-viewer-video" controls playsinline hidden></video>
+        </div>
+        <button id="browse-viewer-next" class="browse-viewer-nav next" type="button" aria-label="Next media">›</button>
+      </div>
+    </section>
+
+    <section id="tagging-shell" class="tagging-shell" hidden aria-label="Souvenir tagging mode">
+      <header class="tagging-header">
+        <button id="exit-tagging" class="icon-button tagging-exit" type="button" aria-label="Exit tagging mode">←</button>
+        <div class="tagging-heading">
+          <p class="tagging-kicker">TAGGING MODE</p>
+          <h2 class="tagging-title">Tag your memories</h2>
+        </div>
+        <span id="tagging-round-badge" class="tagging-round-badge" role="status"></span>
+      </header>
+      <div class="tagging-session-hud">
+        <div class="tagging-remaining-panel">
+          <p id="tagging-remaining-text" class="tagging-remaining-text">0 images remaining</p>
+          <div class="tagging-remaining-track" aria-hidden="true">
+            <div id="tagging-remaining-fill" class="tagging-remaining-fill"></div>
+          </div>
+        </div>
+        <div class="tagging-stats">
+          <div class="tagging-stat-card">
+            <span>Tag timer</span>
+            <strong id="tagging-tag-timer">00:00.0</strong>
+          </div>
+          <div class="tagging-stat-card">
+            <span>Set timer</span>
+            <strong id="tagging-set-timer">00:00.0</strong>
+          </div>
+          <div class="tagging-stat-card">
+            <span>Best tag</span>
+            <strong id="tagging-best-tag">--</strong>
+          </div>
+          <div class="tagging-stat-card">
+            <span>Best set</span>
+            <strong id="tagging-best-set">--</strong>
+          </div>
+          <div class="tagging-stat-card tagging-stat-card--combo">
+            <span>Combo</span>
+            <strong id="tagging-combo">x1</strong>
+          </div>
+          <label class="tagging-stat-card tagging-stat-card--commentary" for="tagging-commentary-enabled">
+            <span>Commentary</span>
+            <span class="tagging-commentary-toggle">
+              <input id="tagging-commentary-enabled" type="checkbox" />
+              <span aria-hidden="true"></span>
+            </span>
+            <strong id="tagging-commentary-state">Off</strong>
+          </label>
+          <div class="tagging-stat-card tagging-stat-card--score">
+            <span>Score</span>
+            <strong id="tagging-score">0</strong>
+          </div>
+        </div>
+      </div>
+      <div class="tagging-tag-bar">
+        <div id="tagging-tag-info" class="tagging-tag-info tagging-tag-info--no-image">
+          <div id="tagging-tag-label" class="tagging-tag-label" aria-live="polite"></div>
+          <div id="tagging-tag-progress" class="tagging-tag-progress"></div>
+        </div>
+        <div class="tagging-progress-track" aria-hidden="true">
+          <div id="tagging-progress-fill" class="tagging-progress-fill"></div>
+        </div>
+        <button id="tagging-next" class="tagging-next-btn" type="button" disabled>
+          Next tag →
+        </button>
+      </div>
+      <div class="tagging-grid-area">
+        <p class="tagging-hint">Click any image to apply the current tag · already-tagged files are dimmed</p>
+        <div id="tagging-grid" class="tagging-grid" role="list" aria-label="Media files for tagging"></div>
+      </div>
+      <p id="tagging-status" class="tagging-status" role="status" aria-live="polite" hidden></p>
+      <div id="tagging-combo-banner" class="tagging-combo-banner" aria-hidden="true" hidden>
+        <p id="tagging-combo-multiplier" class="tagging-combo-multiplier">x2</p>
+        <p id="tagging-combo-text" class="tagging-combo-text">COMBO</p>
+      </div>
+      <div id="tagging-flash" class="tagging-flash" aria-hidden="true"></div>
+      <div id="tagging-fx-layer" class="tagging-fx-layer" aria-hidden="true"></div>
+      <div id="tagging-exit-summary" class="tagging-exit-summary" hidden>
+        <div class="tagging-exit-summary-card">
+          <h3>Session complete</h3>
+          <p id="tagging-final-score" class="tagging-final-score">Score: 0</p>
+          <p id="tagging-final-records" class="tagging-final-records">Best tag: -- · Best set: --</p>
+          <div class="tagging-exit-summary-actions">
+            <button id="tagging-continue" class="secondary-button compact-button" type="button">Keep tagging</button>
+            <button id="tagging-confirm-exit" class="tagging-next-btn" type="button">Exit mode</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="scene-shell" class="scene-shell" hidden aria-label="Souvenir spatial preview">
+      <canvas id="scene"></canvas>
+      <div class="scene-hud">
+        <div class="scene-brand">
+          <img src="/assets/mark.svg" width="28" height="28" alt="" />
+          <span>Souvenir</span>
+        </div>
+        <div class="preview-hint">
+          <kbd>Drag</kbd> orbit · <kbd>Click</kbd> interact · <kbd>Esc</kbd> exit
+        </div>
+        <button id="exit-preview" class="icon-button" type="button" aria-label="Exit preview">×</button>
+      </div>
+      <div id="scene-notice" class="scene-notice" role="status" hidden></div>
+    </section>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
