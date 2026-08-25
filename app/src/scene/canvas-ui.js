@@ -1,6 +1,13 @@
 import * as THREE from "three";
 
 const DEFAULT_FONT = "600 38px system-ui, sans-serif";
+export const INTERACTION_LAYER = 1;
+
+export function markInteractive(object) {
+  object.userData.interactive = true;
+  object.layers.enable(INTERACTION_LAYER);
+  return object;
+}
 
 export function roundedRect(context, x, y, width, height, radius) {
   context.beginPath();
@@ -101,7 +108,7 @@ export function makeButton(
   });
   const button = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
   button.userData.action = action;
-  button.userData.interactive = true;
+  markInteractive(button);
   button.userData.kind = "button";
   button.userData.label = label;
   button.userData.textureSize = texture.userData.canvasSize;

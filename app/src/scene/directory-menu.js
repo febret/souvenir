@@ -2,6 +2,7 @@ import * as THREE from "three";
 
 import {
   disposeObject,
+  markInteractive,
   makeButton,
   makeCanvasTexture,
   roundedRect,
@@ -116,7 +117,7 @@ export class DirectoryMenu extends THREE.Group {
       }),
     );
     backdrop.position.z = -0.01;
-    backdrop.userData.interactive = true;
+    markInteractive(backdrop);
     backdrop.userData.kind = "browser-menu-background";
     backdrop.userData.gestureTarget = false;
     this.add(backdrop);

@@ -5,6 +5,7 @@ import {
   saveSettings,
 } from "../core/settings.js";
 import { matchesTagFilter, normalizeTagIds } from "../core/tags.js";
+import { createScene, sceneShotPayload } from "../core/scene-state.js";
 import {
   aggregateEntryTagCounts,
   createCommentaryVolumeController,
@@ -13,15 +14,13 @@ import {
   normalizeTagFrequency,
   suggestCommentaryTags,
 } from "../core/commentary.js";
-import { MediaApi, flattenDirectoryTree } from "../services/media-api.js";
 import { SpatialApp } from "../scene/spatial-app.js";
-import { BrowseController } from "./browse-controller.js";
+import { MediaApi, flattenDirectoryTree } from "../services/media-api.js";
 import {
   applyTagPillPreview,
   createTagPill,
   TagPreviewResolver,
 } from "./tag-pill.js";
-import { TaggingController } from "./tagging-controller.js";
 
 const LIBRARY_POLL_INTERVAL_MS = 1000;
 
@@ -161,6 +160,9 @@ export class HomeController {
     this.panelScrollPositions = new Map();
     this.reconcilingPanelLayout = false;
     this.focusRestoreTimer = null;
+    this.sceneList = [];
+    this.sceneUiState = createScene({ id: null, name: "New scene", loop: true });
+    this.selectedSceneId = null;
     this.tagPreviewResolver = new TagPreviewResolver({
       api: this.api,
       selectedDirectories: () => [...this.settings.mediaDirectories],
@@ -190,6 +192,10 @@ export class HomeController {
       autoplay: document.querySelector("#autoplay"),
       speed: document.querySelector("#slideshow-speed"),
       speedValue: document.querySelector("#slideshow-value"),
+      admDefaultDepthIntensity: document.querySelector("#adm-default-depth-intensity"),
+      admDefaultDepthIntensityValue: document.querySelector("#adm-default-depth-intensity-value"),
+      admMaxResolution: document.querySelector("#adm-max-resolution"),
+      admMaxResolutionValue: document.querySelector("#adm-max-resolution-value"),
       tagsCard: document.querySelector(".tags-card"),
       tagName: document.querySelector("#tag-name"),
       tagSortOrder: document.querySelector("#tag-sort-order"),
@@ -224,8 +230,20 @@ export class HomeController {
       support: document.querySelector("#xr-support"),
       error: document.querySelector("#app-error"),
       sceneShell: document.querySelector("#scene-shell"),
+      sceneHud: document.querySelector(".scene-hud"),
       canvas: document.querySelector("#scene"),
       exitPreview: document.querySelector("#exit-preview"),
+      sceneControls: document.querySelector("#scene-controls"),
+      sceneControlsHome: document.querySelector("#scene-controls-home"),
+      sceneSelect: document.querySelector("#scene-select"),
+      sceneCreateName: document.querySelector("#scene-create-name"),
+      sceneCreateButton: document.querySelector("#scene-create-button"),
+      scenePlaybackToggle: document.querySelector("#scene-playback-toggle"),
+      sceneShotSelect: document.querySelector("#scene-shot-select"),
+      sceneLoopMode: document.querySelector("#scene-loop-mode"),
+      sceneDuration: document.querySelector("#scene-duration"),
+      sceneDurationValue: document.querySelector("#scene-duration-value"),
+      sceneCaptureDelete: document.querySelector("#scene-capture-delete"),
     };
   }
 
@@ -235,6 +253,7 @@ export class HomeController {
     this.#renderSettings();
     this.#renderTags();
     this.#renderCommentary();
+    this.#renderSceneControls();
     this.#updateLaunchAvailability();
     await Promise.all([this.#loadLibrary(), this.#detectXr(), this.#loadCommentary()]);
   }
@@ -247,6 +266,17 @@ export class HomeController {
     this.elements.speed.addEventListener("input", () => {
       this.settings.slideshowIntervalMs = Number(this.elements.speed.value) * 1000;
       this.elements.speedValue.textContent = `${this.elements.speed.value} sec`;
+      this.#persist();
+    });
+    this.elements.admDefaultDepthIntensity.addEventListener("input", () => {
+      this.settings.admDefaultDepthIntensity = Number(this.elements.admDefaultDepthIntensity.value);
+      this.elements.admDefaultDepthIntensityValue.textContent =
+        `${this.settings.admDefaultDepthIntensity.toFixed(2)}×`;
+      this.#persist();
+    });
+    this.elements.admMaxResolution.addEventListener("input", () => {
+      this.settings.admMaxResolution = Number(this.elements.admMaxResolution.value);
+      this.elements.admMaxResolutionValue.textContent = `${this.settings.admMaxResolution} px`;
       this.#persist();
     });
     this.elements.tagName.addEventListener("input", () => this.#renderTags());
@@ -310,6 +340,30 @@ export class HomeController {
     });
     this.elements.preview.addEventListener("click", () => this.openScene(false));
     this.elements.launch.addEventListener("click", () => this.openScene(true));
+    this.elements.sceneCreateButton.addEventListener("click", () => {
+      this.#createScene().catch((error) => this.#showError(error));
+    });
+    this.elements.sceneSelect.addEventListener("change", () => {
+      this.#selectSceneFromUi().catch((error) => this.#showError(error));
+    });
+    this.elements.scenePlaybackToggle.addEventListener("click", () => {
+      this.#toggleScenePlayback().catch((error) => this.#showError(error));
+    });
+    this.elements.sceneShotSelect.addEventListener("change", () => {
+      this.#selectSceneShotFromUi().catch((error) => this.#showError(error));
+    });
+    this.elements.sceneLoopMode.addEventListener("change", () => {
+      this.#setSceneLoopMode().catch((error) => this.#showError(error));
+    });
+    this.elements.sceneDuration.addEventListener("input", () => {
+      this.elements.sceneDurationValue.textContent = `${this.elements.sceneDuration.value} sec`;
+    });
+    this.elements.sceneDuration.addEventListener("change", () => {
+      this.#setSceneDurationFromUi().catch((error) => this.#showError(error));
+    });
+    this.elements.sceneCaptureDelete.addEventListener("click", () => {
+      this.#captureOrDeleteSceneShot().catch((error) => this.#showError(error));
+    });
     this.elements.browse.addEventListener("click", () => this.openBrowse());
     this.elements.tagging.addEventListener("click", () => this.openTagging());
     this.elements.exitPreview.addEventListener("click", () => this.closeScene());
@@ -339,6 +393,11 @@ export class HomeController {
   #renderSettings() {
     this.elements.autoplay.checked = this.settings.autoplayVideos;
     this.elements.speed.value = String(this.settings.slideshowIntervalMs / 1000);
+    this.elements.admDefaultDepthIntensity.value = String(this.settings.admDefaultDepthIntensity);
+    this.elements.admDefaultDepthIntensityValue.textContent =
+      `${this.settings.admDefaultDepthIntensity.toFixed(2)}×`;
+    this.elements.admMaxResolution.value = String(this.settings.admMaxResolution);
+    this.elements.admMaxResolutionValue.textContent = `${this.settings.admMaxResolution} px`;
     this.elements.speedValue.textContent = `${this.elements.speed.value} sec`;
     this.#renderCaptionSettings();
   }
@@ -601,6 +660,7 @@ export class HomeController {
     this.elements.libraryProgress.hidden = true;
     this.#renderDirectories();
     this.#refreshCommentarySuggestData({ refreshMedia: true });
+    await this.#refreshSceneList();
     this.#updateLaunchAvailability();
     this.#setConnectionStatus("Local server", "connected");
   }
@@ -1857,6 +1917,7 @@ export class HomeController {
     if (!this.libraryReady) return;
     try {
       if (!this.browseController) {
+        const { BrowseController } = await import("./browse-controller.js");
         this.browseController = new BrowseController(this.document, {
           api: this.api,
           selectedDirectories: () => [...this.settings.mediaDirectories],
@@ -1880,6 +1941,7 @@ export class HomeController {
     if (!this.libraryReady) return;
     try {
       if (!this.taggingController) {
+        const { TaggingController } = await import("./tagging-controller.js");
         this.taggingController = new TaggingController(this.document, {
           api: this.api,
           selectedDirectories: () => [...this.settings.mediaDirectories],
@@ -1906,6 +1968,7 @@ export class HomeController {
       return;
     }
     try {
+      const selectedSceneId = this.selectedSceneId;
       if (!this.spatialApp) {
         this.spatialApp = new SpatialApp({
           canvas: this.elements.canvas,
@@ -1915,6 +1978,11 @@ export class HomeController {
           libraryId: this.libraryId,
           onExit: () => this.closeScene(),
           onError: (error) => this.#showError(error),
+          onSceneStateChange: (state) => {
+            this.sceneUiState = state;
+            this.selectedSceneId = state.id;
+            this.#renderSceneControls();
+          },
         });
         if (new URLSearchParams(window.location.search).has("debug")) {
           window.__souvenirApp = this.spatialApp;
@@ -1922,8 +1990,15 @@ export class HomeController {
       }
       this.elements.home.hidden = true;
       this.elements.sceneShell.hidden = false;
+      this.elements.sceneHud.append(this.elements.sceneControls);
       await this.spatialApp.start({ immersive });
+      this.sceneUiState = selectedSceneId
+        ? await this.spatialApp.loadScene(selectedSceneId)
+        : this.spatialApp.getSceneState();
+      await this.#refreshSceneList();
+      this.#renderSceneControls();
     } catch (error) {
+      this.elements.sceneControlsHome.append(this.elements.sceneControls);
       this.elements.home.hidden = false;
       this.elements.sceneShell.hidden = true;
       this.#showError(error);
@@ -1932,8 +2007,173 @@ export class HomeController {
 
   closeScene() {
     this.spatialApp?.stop();
+    this.elements.sceneControlsHome.append(this.elements.sceneControls);
     this.elements.sceneShell.hidden = true;
     this.elements.home.hidden = false;
+  }
+
+  #renderSceneControls() {
+    const sceneState = this.sceneUiState;
+    const sceneSelect = this.elements.sceneSelect;
+    sceneSelect.replaceChildren();
+    const draftOption = this.document.createElement("option");
+    draftOption.value = "";
+    draftOption.textContent = "New scene";
+    sceneSelect.append(draftOption);
+    for (const scene of this.sceneList) {
+      const option = this.document.createElement("option");
+      option.value = scene.id;
+      option.textContent = scene.name;
+      sceneSelect.append(option);
+    }
+    sceneSelect.value = this.selectedSceneId ?? "";
+
+    const shotSelect = this.elements.sceneShotSelect;
+    shotSelect.replaceChildren();
+    const none = this.document.createElement("option");
+    none.value = "";
+    none.textContent = "None";
+    shotSelect.append(none);
+    (sceneState?.shots ?? []).forEach((shot, index) => {
+      const option = this.document.createElement("option");
+      option.value = String(index);
+      option.textContent = `Shot ${index + 1}`;
+      shotSelect.append(option);
+    });
+    shotSelect.value = sceneState && sceneState.selected_shot_index >= 0
+      ? String(sceneState.selected_shot_index)
+      : "";
+    this.elements.sceneLoopMode.value = sceneState?.loop === false ? "stop" : "loop";
+    this.elements.scenePlaybackToggle.textContent = sceneState?.playback_active ? "Stop" : "Play";
+    const duration = sceneState?.selected_shot_duration_sec ?? 8;
+    this.elements.sceneDuration.value = String(duration);
+    this.elements.sceneDurationValue.textContent = `${duration} sec`;
+    this.elements.sceneCaptureDelete.textContent = sceneState?.can_delete_selected_shot
+      ? "Delete shot"
+      : "Capture shot";
+    const spatialActive = Boolean(this.spatialApp?.running);
+    this.elements.scenePlaybackToggle.disabled = !spatialActive || (sceneState?.shots.length ?? 0) === 0;
+    this.elements.sceneCaptureDelete.disabled = !spatialActive;
+  }
+
+  async #refreshSceneList() {
+    const payload = await this.api.scenes();
+    this.sceneList = Array.isArray(payload?.scenes) ? payload.scenes : [];
+    this.#renderSceneControls();
+  }
+
+  async #createScene() {
+    const name = this.elements.sceneCreateName.value.trim();
+    if (!name) return;
+    if (this.spatialApp?.running) {
+      this.sceneUiState = await this.spatialApp.createNamedScene(name);
+    } else {
+      const created = createScene(await this.api.createScene(name));
+      const draft = createScene({
+        ...created,
+        ...sceneShotPayload(this.sceneUiState),
+        id: created.id,
+        name: created.name,
+      });
+      this.sceneUiState = this.#toSceneUiState(
+        createScene(await this.api.saveScene(created.id, sceneShotPayload(draft))),
+      );
+    }
+    this.selectedSceneId = this.sceneUiState.id;
+    this.elements.sceneCreateName.value = "";
+    await this.#refreshSceneList();
+    this.#renderSceneControls();
+  }
+
+  async #selectSceneFromUi() {
+    const sceneId = this.elements.sceneSelect.value;
+    this.selectedSceneId = sceneId || null;
+    if (!sceneId) {
+      this.sceneUiState = this.spatialApp?.running
+        ? this.spatialApp.resetToNewScene()
+        : this.#toSceneUiState(createScene({ id: null, name: "New scene", loop: true }));
+      this.#renderSceneControls();
+      return;
+    }
+    this.sceneUiState = this.spatialApp?.running
+      ? await this.spatialApp.loadScene(sceneId)
+      : this.#toSceneUiState(createScene(await this.api.scene(sceneId)));
+    this.#renderSceneControls();
+  }
+
+  async #toggleScenePlayback() {
+    if (!this.spatialApp) return;
+    this.sceneUiState = await this.spatialApp.toggleScenePlayback();
+    this.#renderSceneControls();
+  }
+
+  async #selectSceneShotFromUi() {
+    if (!this.elements.sceneShotSelect.value) return;
+    const index = Number(this.elements.sceneShotSelect.value);
+    if (this.spatialApp?.running) {
+      this.sceneUiState = await this.spatialApp.selectSceneShot(index);
+    } else {
+      const shot = this.sceneUiState.shots[index];
+      if (!shot) return;
+      const next = createScene({ ...this.sceneUiState, current_shot_id: shot.id });
+      this.sceneUiState = await this.#saveHomeScene(next);
+    }
+    this.#renderSceneControls();
+  }
+
+  async #setSceneLoopMode() {
+    const loop = this.elements.sceneLoopMode.value === "loop";
+    this.sceneUiState = this.spatialApp?.running
+      ? await this.spatialApp.setSceneLoop(loop)
+      : await this.#saveHomeScene(createScene({ ...this.sceneUiState, loop }));
+    this.#renderSceneControls();
+  }
+
+  async #setSceneDurationFromUi() {
+    const duration = Number(this.elements.sceneDuration.value);
+    if (this.spatialApp?.running) {
+      this.sceneUiState = await this.spatialApp.setSceneShotDuration(duration);
+    } else {
+      const selectedIndex = this.sceneUiState.shots.findIndex(
+        (shot) => shot.id === this.sceneUiState.current_shot_id,
+      );
+      const next = selectedIndex < 0
+        ? createScene({ ...this.sceneUiState, default_duration_sec: duration })
+        : createScene({
+          ...this.sceneUiState,
+          shots: this.sceneUiState.shots.map((shot, index) => (
+            index === selectedIndex ? { ...shot, duration_sec: duration } : shot
+          )),
+        });
+      this.sceneUiState = await this.#saveHomeScene(next);
+    }
+    this.#renderSceneControls();
+  }
+
+  async #captureOrDeleteSceneShot() {
+    if (!this.spatialApp) return;
+    this.sceneUiState = await this.spatialApp.captureOrDeleteSceneShot();
+    this.#renderSceneControls();
+  }
+
+  async #saveHomeScene(scene) {
+    if (!scene.id) return this.#toSceneUiState(scene);
+    return this.#toSceneUiState(createScene(
+      await this.api.saveScene(scene.id, sceneShotPayload(scene)),
+    ));
+  }
+
+  #toSceneUiState(scene) {
+    const selectedIndex = scene.shots.findIndex((shot) => shot.id === scene.current_shot_id);
+    return {
+      ...scene,
+      selected_shot_index: selectedIndex,
+      selected_shot_duration_sec: selectedIndex >= 0
+        ? scene.shots[selectedIndex].duration_sec
+        : scene.default_duration_sec,
+      playback_active: false,
+      can_delete_selected_shot: false,
+    };
   }
 
   #showError(error) {

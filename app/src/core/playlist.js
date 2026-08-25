@@ -21,16 +21,3 @@ export function previousMedia(playlist, selectedId) {
   const index = mediaIndex(playlist, selectedId);
   return mediaAt(playlist, index < 0 ? -1 : index - 1);
 }
-
-export function hitZoneForPoint(x, width, sideFraction = 0.25) {
-  if (!Number.isFinite(x) || !Number.isFinite(width) || width <= 0 || sideFraction <= 0 || sideFraction > 0.5) {
-    return null;
-  }
-  if (x <= width * sideFraction) {
-    return "previous";
-  }
-  if (x >= width * (1 - sideFraction)) {
-    return "next";
-  }
-  return null;
-}

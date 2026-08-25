@@ -8,10 +8,14 @@ from typing import Iterator
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
+from .auto_depth import AutoDepthGenerator, AutoDepthService
+from .auto_mask import AutoMaskGenerator, AutoMaskService
 from .commentary import commentary_entries, commentary_type, resolve_commentary_file
+from .depth_maps import MAX_DEPTH_MAP_BYTES, DepthMapStore
 from .media import content_type, is_allowed, is_internal_path, is_media, media_type, metadata, parse_included_dirs, relative_text, resolve_under_root
+from .scenes import SceneStore
 from .masks import MAX_MASK_BYTES, MaskStore
-from .tags import TagStore
+from .tags import DEFAULT_ADM_DEPTH_INTENSITY, TagStore
 from .thumbnails import create_thumbnail
 
 _RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
@@ -96,9 +100,22 @@ def _stream_media(path: Path, request: Request, *, response_media_type: str | No
     return StreamingResponse(_file_chunks(path, start, length), status_code=206, headers=headers, media_type=response_media_type)
 
 
-def add_routes(app: FastAPI, root: Path, commentary_root: Path | None = None) -> None:
+def add_routes(
+    app: FastAPI,
+    root: Path,
+    commentary_root: Path | None = None,
+    *,
+    auto_mask_generator: AutoMaskGenerator | None = None,
+    auto_depth_generator: AutoDepthGenerator | None = None,
+) -> None:
     masks = MaskStore(root)
+    auto_masks = AutoMaskService(root, masks, generator=auto_mask_generator)
+    depth_maps = DepthMapStore(root)
+    auto_depth = AutoDepthService(root, depth_maps, generator=auto_depth_generator)
+    app.state.auto_mask_service = auto_masks
+    app.state.auto_depth_service = auto_depth
     tags = TagStore(root)
+    scenes = SceneStore(root)
 
     @app.get("/api/health")
     def health() -> dict:
@@ -119,6 +136,7 @@ def add_routes(app: FastAPI, root: Path, commentary_root: Path | None = None) ->
         _reject_internal_path(relative)
         allowed = _included(root, include, included_dirs)
         assignments = tags.assignments()
+        adm_settings = tags.media_adm_settings()
         entries = [
             metadata(
                 root,
@@ -127,6 +145,15 @@ def add_routes(app: FastAPI, root: Path, commentary_root: Path | None = None) ->
             )
             for child in _visible_children(root, directory, allowed)
         ]
+        for entry in entries:
+            if entry["kind"] != "file" or not entry["media_type"] or not entry["media_type"].startswith("image/"):
+                continue
+            setting = adm_settings.get(entry["path"])
+            entry["adm"] = {
+                "configured": isinstance(setting, dict),
+                "enabled": bool(setting["enabled"]) if isinstance(setting, dict) else False,
+                "depth_intensity": float(setting["depth_intensity"]) if isinstance(setting, dict) else DEFAULT_ADM_DEPTH_INTENSITY,
+            }
         return {"path": relative_text(relative), "entries": entries, "directories": [entry for entry in entries if entry["kind"] == "directory"], "files": [entry for entry in entries if entry["kind"] == "file"]}
 
     @app.get("/api/tags")
@@ -162,6 +189,24 @@ def add_routes(app: FastAPI, root: Path, commentary_root: Path | None = None) ->
         _require_exact_keys(body, {"tag_ids"})
         return _no_store(tags.replace_assignment(relative, body["tag_ids"]))
 
+    @app.get("/api/media-adm")
+    def get_media_adm(path: str):
+        relative = _image_relative(root, path)
+        return _no_store(tags.media_adm_setting(relative))
+
+    @app.put("/api/media-adm")
+    async def put_media_adm(path: str, request: Request):
+        relative = _image_relative(root, path)
+        body = await _json_object(request)
+        _require_exact_keys(body, {"enabled", "depth_intensity"})
+        return _no_store(
+            tags.replace_media_adm_setting(
+                relative,
+                enabled=body["enabled"],
+                depth_intensity=body["depth_intensity"],
+            )
+        )
+
     @app.put("/api/media-tags/bulk")
     async def put_media_tags_bulk(request: Request):
         body = await _json_object(request)
@@ -185,6 +230,25 @@ def add_routes(app: FastAPI, root: Path, commentary_root: Path | None = None) ->
             seen_paths.add(canonical_path)
             assignments.append((relative, assignment["tag_ids"]))
         return _no_store({"assignments": tags.replace_assignments(assignments)})
+
+    @app.get("/api/scenes")
+    def list_scenes() -> Response:
+        return _no_store(scenes.list_scenes())
+
+    @app.post("/api/scenes", status_code=201)
+    async def create_scene(request: Request) -> Response:
+        body = await _json_object(request)
+        _require_exact_keys(body, {"name"})
+        return _no_store(scenes.create_scene(body["name"]), status_code=201)
+
+    @app.get("/api/scenes/{scene_id}")
+    def get_scene(scene_id: str) -> Response:
+        return _no_store(scenes.get_scene(scene_id))
+
+    @app.put("/api/scenes/{scene_id}")
+    async def put_scene(scene_id: str, request: Request) -> Response:
+        body = await _json_object(request)
+        return _no_store(scenes.replace_scene(scene_id, body))
 
     @app.get("/api/commentary")
     def list_commentary() -> Response:
@@ -305,6 +369,140 @@ def add_routes(app: FastAPI, root: Path, commentary_root: Path | None = None) ->
         relative = masks.media_relative(path)
         return masks.delete(relative)
 
+    @app.post("/api/mask/auto")
+    def request_auto_mask(path: str):
+        relative = _image_relative(root, path)
+        return _no_store(auto_masks.request(relative))
+
+    @app.get("/api/mask/auto")
+    def auto_mask_status(path: str):
+        relative = _image_relative(root, path)
+        return _no_store(auto_masks.status(relative))
+
+    @app.delete("/api/mask/auto")
+    def cancel_auto_mask(path: str):
+        relative = _image_relative(root, path)
+        return _no_store(auto_masks.cancel(relative))
+
+    @app.get("/api/depth-info")
+    def depth_info(path: str):
+        relative = depth_maps.image_relative(path)
+        return Response(
+            content=json_response(depth_maps.info(relative)),
+            media_type="application/json",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/depth")
+    def get_depth(path: str):
+        relative = depth_maps.image_relative(path)
+        return Response(content=depth_maps.read(relative), media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    @app.put("/api/depth")
+    async def put_depth(path: str, request: Request):
+        relative = depth_maps.image_relative(path)
+        content_type_header = request.headers.get("content-type", "")
+        if content_type_header.split(";", 1)[0].strip().lower() != "image/png":
+            raise HTTPException(415, "depth content type must be image/png")
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                declared_length = int(content_length)
+            except ValueError as error:
+                raise HTTPException(400, "invalid Content-Length") from error
+            if declared_length < 0:
+                raise HTTPException(400, "invalid Content-Length")
+            if declared_length > MAX_DEPTH_MAP_BYTES:
+                raise HTTPException(413, "depth body is too large")
+        body = await _read_depth_body(request)
+        return depth_maps.write(relative, body)
+
+    @app.delete("/api/depth")
+    def delete_depth(path: str):
+        relative = depth_maps.image_relative(path)
+        return depth_maps.delete(relative)
+
+    @app.post("/api/depth/auto")
+    def request_auto_depth(
+        path: str,
+        max_resolution: int = Query(default=512, ge=64, le=512),
+    ):
+        relative = _image_relative(root, path)
+        return _no_store(auto_depth.request(relative, max_dimension=max_resolution))
+
+    @app.get("/api/depth/auto")
+    def auto_depth_status(path: str):
+        relative = _image_relative(root, path)
+        return _no_store(auto_depth.status(relative))
+
+    @app.delete("/api/depth/auto")
+    def cancel_auto_depth(path: str):
+        relative = _image_relative(root, path)
+        return _no_store(auto_depth.cancel(relative))
+
+    @app.post("/api/adm/auto")
+    def request_adm(
+        path: str,
+        max_resolution: int = Query(default=512, ge=64, le=512),
+    ):
+        relative = _image_relative(root, path)
+        return _no_store(
+            _adm_status(
+                relative,
+                request_missing=True,
+                max_resolution=max_resolution,
+            )
+        )
+
+    @app.get("/api/adm/auto")
+    def adm_status(path: str):
+        relative = _image_relative(root, path)
+        return _no_store(_adm_status(relative, request_missing=False))
+
+    @app.delete("/api/adm/auto")
+    def cancel_adm(path: str):
+        relative = _image_relative(root, path)
+        mask = auto_masks.cancel(relative)
+        depth = auto_depth.cancel(relative)
+        return _no_store(_combined_adm_snapshot(relative, mask, depth))
+
+    def _adm_status(
+        relative: Path,
+        *,
+        request_missing: bool,
+        max_resolution: int = 512,
+    ) -> dict[str, object]:
+        mask_info = masks.info(relative)
+        depth_info = depth_maps.info(relative)
+        mask_state = auto_masks.request(relative) if request_missing and not mask_info["exists"] else auto_masks.status(relative)
+        depth_state = (
+            auto_depth.request(relative, max_dimension=max_resolution)
+            if request_missing and not depth_info["exists"]
+            else auto_depth.status(relative)
+        )
+        return _combined_adm_snapshot(relative, mask_state, depth_state)
+
+    def _combined_adm_snapshot(relative: Path, mask_state: dict[str, object], depth_state: dict[str, object]) -> dict[str, object]:
+        statuses = [str(mask_state.get("status", "idle")), str(depth_state.get("status", "idle"))]
+        if "failed" in statuses:
+            status = "failed"
+        elif "running" in statuses:
+            status = "running"
+        elif "queued" in statuses:
+            status = "queued"
+        elif "cancelled" in statuses:
+            status = "cancelled"
+        elif bool(mask_state.get("mask", {}).get("exists")) and bool(depth_state.get("depth", {}).get("exists")):
+            status = "completed"
+        else:
+            status = "idle"
+        return {
+            "path": relative_text(relative),
+            "status": status,
+            "mask": mask_state,
+            "depth": depth_state,
+        }
+
 
 async def _read_mask_body(request: Request) -> bytes:
     chunks: list[bytes] = []
@@ -313,6 +511,17 @@ async def _read_mask_body(request: Request) -> bytes:
         size += len(chunk)
         if size > MAX_MASK_BYTES:
             raise HTTPException(413, "mask body is too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _read_depth_body(request: Request) -> bytes:
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_DEPTH_MAP_BYTES:
+            raise HTTPException(413, "depth body is too large")
         chunks.append(chunk)
     return b"".join(chunks)
 
@@ -326,6 +535,15 @@ def _media_relative(root: Path, path: str) -> Path:
     source, relative = resolve_under_root(root, path, directory=False)
     _reject_internal_path(relative)
     if media_type(source) is None:
+        raise HTTPException(404, "unsupported media type")
+    return source.relative_to(root)
+
+
+def _image_relative(root: Path, path: str) -> Path:
+    source, relative = resolve_under_root(root, path, directory=False)
+    _reject_internal_path(relative)
+    source_type = media_type(source)
+    if source_type is None or not source_type.startswith("image/"):
         raise HTTPException(404, "unsupported media type")
     return source.relative_to(root)
 
@@ -351,9 +569,10 @@ def _require_exact_keys(body: dict, expected: set[str]) -> None:
         raise HTTPException(422, f"request body must contain only {', '.join(sorted(expected))}")
 
 
-def _no_store(value: dict) -> Response:
+def _no_store(value: dict, *, status_code: int = 200) -> Response:
     return Response(
         content=json.dumps(value, ensure_ascii=False, separators=(",", ":")),
+        status_code=status_code,
         media_type="application/json",
         headers={"Cache-Control": "no-store"},
     )

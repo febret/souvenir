@@ -13,7 +13,11 @@ const IMAGE_FIXTURES = Object.freeze({
 const DEFAULT_IMAGE_FIXTURE = imageFixture(800, 600, "#888888");
 const DEFAULT_LIBRARY_ID = "/g/media";
 const MASK_PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR42mP8z8DwnwEImBigAAAfFwIC9VMZcwAAAABJRU5ErkJggg==",
+  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGP8////fwYGBgYmEAHCAD34BABm6tHAAAAAAElFTkSuQmCC",
+  "base64",
+);
+const DEPTH_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAAAAABX3VL4AAAADklEQVR4nGNsYGBiYAAAApIAhPd8o1gAAAAASUVORK5CYII=",
   "base64",
 );
 
@@ -242,7 +246,12 @@ async function mockServer(
     imageDelays = {},
     libraryId = DEFAULT_LIBRARY_ID,
     maskServer = { masks: new Map(), requests: [] },
+    autoMaskServer = { jobs: new Map(), requests: [], autoComplete: true, device: "cuda" },
+    depthServer = { maps: new Map(), requests: [] },
+    autoDepthServer = { jobs: new Map(), requests: [], autoComplete: true, device: "cuda" },
+    admServer = { settings: new Map(), requests: [] },
     tagServer = { tags: [], assignments: new Map(), requests: [], nextId: 1 },
+    sceneServer = { scenes: new Map(), requests: [], nextId: 1 },
     commentaryServer = {
       available: false,
       entries: [],
@@ -262,6 +271,9 @@ async function mockServer(
   } = {},
 ) {
   let statusIndex = 0;
+  sceneServer.scenes ??= new Map();
+  sceneServer.requests ??= [];
+  sceneServer.nextId ??= 1;
   commentaryServer.captions ??= new Map();
   commentaryServer.volumes ??= new Map();
   await page.route("**/api/**", async (route) => {
@@ -277,6 +289,60 @@ async function mockServer(
     if (url.pathname === "/api/health") {
       return route.fulfill({ json: { status: "ok", library_id: libraryId } });
     }
+    if (url.pathname === "/api/scenes") {
+      const method = route.request().method();
+      sceneServer.requests.push({ method, path: url.pathname });
+      if (method === "GET") {
+        return route.fulfill({
+          json: {
+            scenes: [...sceneServer.scenes.values()].map((scene) => ({
+              id: scene.id,
+              name: scene.name,
+              loop: scene.loop,
+              default_duration_sec: scene.default_duration_sec,
+              shot_count: scene.shots.length,
+              updated_at: scene.updated_at,
+            })),
+          },
+        });
+      }
+      if (method === "POST") {
+        const body = route.request().postDataJSON() ?? {};
+        const scene = {
+          id: `scene-${sceneServer.nextId++}`,
+          name: typeof body.name === "string" && body.name.trim() ? body.name.trim() : "New scene",
+          loop: true,
+          default_duration_sec: 8,
+          current_shot_id: null,
+          shots: [],
+          updated_at: "2026-03-01T00:00:00Z",
+        };
+        sceneServer.scenes.set(scene.id, scene);
+        return route.fulfill({ status: 201, json: scene });
+      }
+    }
+    if (url.pathname.startsWith("/api/scenes/")) {
+      const method = route.request().method();
+      const sceneId = decodeURIComponent(url.pathname.slice("/api/scenes/".length));
+      sceneServer.requests.push({ method, path: url.pathname });
+      if (method === "GET" || method === "PUT") {
+        const scene = sceneServer.scenes.get(sceneId);
+        if (!scene) return route.fulfill({ status: 404, json: { detail: "Scene not found." } });
+        if (method === "PUT") {
+          const body = route.request().postDataJSON() ?? {};
+          const saved = {
+            ...scene,
+            ...body,
+            id: scene.id,
+            name: scene.name,
+            updated_at: "2026-03-01T00:00:01Z",
+          };
+          sceneServer.scenes.set(sceneId, saved);
+          return route.fulfill({ json: saved });
+        }
+        return route.fulfill({ json: scene });
+      }
+    }
     if (url.pathname === "/api/tree") {
       return route.fulfill({
         json: tree,
@@ -287,6 +353,11 @@ async function mockServer(
       const withTags = (entry) => ({
         ...entry,
         tag_ids: [...(tagServer.assignments.get(entry.path) ?? entry.tag_ids ?? [])],
+        adm: admServer.settings.get(entry.path) ?? entry.adm ?? {
+          configured: false,
+          enabled: false,
+          depth_intensity: 0.35,
+        },
       });
       const listedEntries = [...(mediaEntries[path] ?? []), ...(extraEntries[path] ?? [])]
         .map(withTags);
@@ -448,6 +519,29 @@ async function mockServer(
       }
       return route.fulfill({ json: { assignments: saved } });
     }
+    if (url.pathname === "/api/media-adm") {
+      const path = url.searchParams.get("path") ?? "";
+      const method = route.request().method();
+      if (method === "GET") {
+        const setting = admServer.settings.get(path) ?? {
+          configured: false,
+          enabled: false,
+          depth_intensity: 0.35,
+        };
+        return route.fulfill({ json: { path, ...setting } });
+      }
+      if (method === "PUT") {
+        const body = route.request().postDataJSON() ?? {};
+        const setting = {
+          configured: true,
+          enabled: Boolean(body.enabled),
+          depth_intensity: Number.isFinite(body.depth_intensity) ? body.depth_intensity : 0.35,
+        };
+        admServer.settings.set(path, setting);
+        admServer.requests.push({ method, path, setting });
+        return route.fulfill({ json: { path, ...setting } });
+      }
+    }
     if (url.pathname === "/api/thumbnail" || url.pathname === "/api/file") {
       const path = url.searchParams.get("path") ?? "";
       const delay = imageDelays[path] ?? 0;
@@ -522,9 +616,285 @@ async function mockServer(
         });
       }
     }
+    if (url.pathname === "/api/mask/auto") {
+      const path = url.searchParams.get("path") ?? "";
+      const method = route.request().method();
+      const now = "2026-08-24T00:00:00Z";
+      const current = autoMaskServer.jobs.get(path);
+      const toResponse = (state) => ({
+        path,
+        status: state?.status ?? "idle",
+        requested_at: state?.requested_at ?? null,
+        started_at: state?.started_at ?? null,
+        completed_at: state?.completed_at ?? null,
+        updated_at: state?.updated_at ?? null,
+        error: state?.error ?? null,
+        device: state?.device ?? null,
+        mask: {
+          exists: Boolean(maskServer.masks.get(path)),
+          path,
+          blur: maskServer.masks.get(path)?.blur ?? 0,
+          updated_at: maskServer.masks.get(path)?.updatedAt ?? null,
+          url: maskServer.masks.get(path) ? `/api/mask?path=${encodeURIComponent(path)}` : null,
+        },
+      });
+      if (method === "POST") {
+        const job = current?.status === "queued" || current?.status === "running"
+          ? current
+          : {
+            status: "queued",
+            requested_at: now,
+            started_at: null,
+            completed_at: null,
+            updated_at: now,
+            error: null,
+            device: null,
+            polls: 0,
+          };
+        autoMaskServer.jobs.set(path, job);
+        autoMaskServer.requests.push({ method, path });
+        return route.fulfill({ json: toResponse(job) });
+      }
+      if (method === "GET") {
+        if (current && autoMaskServer.autoComplete && (current.status === "queued" || current.status === "running")) {
+          current.polls = (current.polls ?? 0) + 1;
+          if (current.polls === 1) {
+            current.status = "running";
+            current.started_at = now;
+            current.updated_at = now;
+            current.device = autoMaskServer.device ?? "cuda";
+          } else {
+            current.status = "completed";
+            current.completed_at = now;
+            current.updated_at = now;
+            current.device = autoMaskServer.device ?? "cuda";
+            maskServer.masks.set(path, {
+              png: maskServer.masks.get(path)?.png ?? MASK_PNG,
+              blur: 0,
+              updatedAt: now,
+            });
+          }
+        }
+        return route.fulfill({ json: toResponse(autoMaskServer.jobs.get(path)) });
+      }
+      if (method === "DELETE") {
+        if (current && (current.status === "queued" || current.status === "running")) {
+          current.status = "cancelled";
+          current.completed_at = now;
+          current.updated_at = now;
+        }
+        autoMaskServer.requests.push({ method, path });
+        return route.fulfill({ json: toResponse(autoMaskServer.jobs.get(path)) });
+      }
+    }
+    if (url.pathname === "/api/depth-info") {
+      const path = url.searchParams.get("path") ?? "";
+      const depth = depthServer.maps.get(path);
+      return route.fulfill({
+        json: {
+          exists: Boolean(depth),
+          path,
+          updated_at: depth?.updatedAt ?? null,
+          url: depth ? `/api/depth?path=${encodeURIComponent(path)}` : null,
+        },
+      });
+    }
+    if (url.pathname === "/api/depth") {
+      const path = url.searchParams.get("path") ?? "";
+      const method = route.request().method();
+      if (method === "GET") {
+        const depth = depthServer.maps.get(path);
+        if (!depth) return route.fulfill({ status: 404 });
+        return route.fulfill({ status: 200, contentType: "image/png", body: depth.png });
+      }
+      if (method === "PUT") {
+        const png = route.request().postDataBuffer() ?? DEPTH_PNG;
+        const depth = { png, updatedAt: "2026-08-24T00:00:00Z" };
+        depthServer.maps.set(path, depth);
+        depthServer.requests.push({ method, path, png });
+        return route.fulfill({
+          json: {
+            exists: true,
+            path,
+            updated_at: depth.updatedAt,
+            url: `/api/depth?path=${encodeURIComponent(path)}`,
+          },
+        });
+      }
+      if (method === "DELETE") {
+        depthServer.maps.delete(path);
+        depthServer.requests.push({ method, path });
+        return route.fulfill({ json: { exists: false, path, updated_at: null, url: null } });
+      }
+    }
+    if (url.pathname === "/api/depth/auto") {
+      const path = url.searchParams.get("path") ?? "";
+      const method = route.request().method();
+      const now = "2026-08-24T00:00:00Z";
+      const current = autoDepthServer.jobs.get(path);
+      const toResponse = (state) => ({
+        path,
+        status: state?.status ?? "idle",
+        requested_at: state?.requested_at ?? null,
+        started_at: state?.started_at ?? null,
+        completed_at: state?.completed_at ?? null,
+        updated_at: state?.updated_at ?? null,
+        error: state?.error ?? null,
+        device: state?.device ?? null,
+        depth: {
+          exists: Boolean(depthServer.maps.get(path)),
+          path,
+          updated_at: depthServer.maps.get(path)?.updatedAt ?? null,
+          url: depthServer.maps.get(path) ? `/api/depth?path=${encodeURIComponent(path)}` : null,
+        },
+      });
+      if (method === "POST") {
+        const job = current?.status === "queued" || current?.status === "running"
+          ? current
+          : {
+            status: "queued",
+            requested_at: now,
+            started_at: null,
+            completed_at: null,
+            updated_at: now,
+            error: null,
+            device: null,
+            polls: 0,
+          };
+        autoDepthServer.jobs.set(path, job);
+        autoDepthServer.requests.push({ method, path });
+        return route.fulfill({ json: toResponse(job) });
+      }
+      if (method === "GET") {
+        if (current && autoDepthServer.autoComplete && (current.status === "queued" || current.status === "running")) {
+          current.polls = (current.polls ?? 0) + 1;
+          if (current.polls === 1) {
+            current.status = "running";
+            current.started_at = now;
+            current.updated_at = now;
+            current.device = autoDepthServer.device ?? "cuda";
+          } else {
+            current.status = "completed";
+            current.completed_at = now;
+            current.updated_at = now;
+            current.device = autoDepthServer.device ?? "cuda";
+            depthServer.maps.set(path, {
+              png: depthServer.maps.get(path)?.png ?? DEPTH_PNG,
+              updatedAt: now,
+            });
+          }
+        }
+        return route.fulfill({ json: toResponse(autoDepthServer.jobs.get(path)) });
+      }
+      if (method === "DELETE") {
+        if (current && (current.status === "queued" || current.status === "running")) {
+          current.status = "cancelled";
+          current.completed_at = now;
+          current.updated_at = now;
+        }
+        autoDepthServer.requests.push({ method, path });
+        return route.fulfill({ json: toResponse(autoDepthServer.jobs.get(path)) });
+      }
+    }
+    if (url.pathname === "/api/adm/auto") {
+      const path = url.searchParams.get("path") ?? "";
+      const method = route.request().method();
+      if (method === "POST") {
+        if (!maskServer.masks.has(path)) {
+          autoMaskServer.jobs.set(path, {
+            status: "queued",
+            requested_at: "2026-08-24T00:00:00Z",
+            started_at: null,
+            completed_at: null,
+            updated_at: "2026-08-24T00:00:00Z",
+            error: null,
+            device: null,
+            polls: 0,
+          });
+        }
+        if (!depthServer.maps.has(path)) {
+          autoDepthServer.jobs.set(path, {
+            status: "queued",
+            requested_at: "2026-08-24T00:00:00Z",
+            started_at: null,
+            completed_at: null,
+            updated_at: "2026-08-24T00:00:00Z",
+            error: null,
+            device: null,
+            polls: 0,
+          });
+        }
+      }
+      if (method === "DELETE") {
+        const mask = autoMaskServer.jobs.get(path);
+        const depth = autoDepthServer.jobs.get(path);
+        if (mask) mask.status = "cancelled";
+        if (depth) depth.status = "cancelled";
+      }
+      if (method === "GET") {
+        const mask = autoMaskServer.jobs.get(path);
+        if (mask && autoMaskServer.autoComplete && (mask.status === "queued" || mask.status === "running")) {
+          mask.polls = (mask.polls ?? 0) + 1;
+          if (mask.polls === 1) {
+            mask.status = "running";
+          } else {
+            mask.status = "completed";
+            maskServer.masks.set(path, {
+              png: maskServer.masks.get(path)?.png ?? MASK_PNG,
+              blur: 0,
+              updatedAt: "2026-08-24T00:00:00Z",
+            });
+          }
+        }
+        const depth = autoDepthServer.jobs.get(path);
+        if (depth && autoDepthServer.autoComplete && (depth.status === "queued" || depth.status === "running")) {
+          depth.polls = (depth.polls ?? 0) + 1;
+          if (depth.polls === 1) {
+            depth.status = "running";
+          } else {
+            depth.status = "completed";
+            depthServer.maps.set(path, {
+              png: depthServer.maps.get(path)?.png ?? DEPTH_PNG,
+              updatedAt: "2026-08-24T00:00:00Z",
+            });
+          }
+        }
+      }
+      const maskStatus = autoMaskServer.jobs.get(path)?.status ?? (maskServer.masks.has(path) ? "completed" : "idle");
+      const depthStatus = autoDepthServer.jobs.get(path)?.status ?? (depthServer.maps.has(path) ? "completed" : "idle");
+      const status = [maskStatus, depthStatus].includes("running")
+        ? "running"
+        : [maskStatus, depthStatus].includes("queued")
+          ? "queued"
+          : [maskStatus, depthStatus].includes("failed")
+            ? "failed"
+            : [maskStatus, depthStatus].includes("cancelled")
+              ? "cancelled"
+              : (maskServer.masks.has(path) && depthServer.maps.has(path) ? "completed" : "idle");
+      return route.fulfill({
+        json: {
+          path,
+          status,
+          mask: {
+            path,
+            status: maskStatus,
+            mask: {
+              exists: Boolean(maskServer.masks.get(path)),
+            },
+          },
+          depth: {
+            path,
+            status: depthStatus,
+            depth: {
+              exists: Boolean(depthServer.maps.get(path)),
+            },
+          },
+        },
+      });
+    }
     return route.fulfill({ status: 404, json: { detail: "Not found" } });
   });
-  return { maskServer, tagServer };
+  return { maskServer, depthServer, tagServer, admServer };
 }
 
 function directoryRow(page, path) {
@@ -738,6 +1108,7 @@ export {
   DEFAULT_IMAGE_FIXTURE,
   DEFAULT_LIBRARY_ID,
   MASK_PNG,
+  DEPTH_PNG,
   wavFixture,
   WAV_FIXTURE,
   DIRECTORY_PATHS,

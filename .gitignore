@@ -8,3 +8,4 @@ __pycache__/
 .souvenir-certs/
 .souvenir-thumbnails/
 .vscode/settings.json
+.VSCodeCounter

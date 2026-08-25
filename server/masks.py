@@ -51,6 +51,28 @@ class MaskStore:
 
     def write(self, relative: Path, data: bytes, blur: int) -> dict[str, bool | int | str | None]:
         normalized = normalize_png(data)
+        return self._write_normalized(relative, normalized, blur)
+
+    def write_generated(
+        self,
+        relative: Path,
+        data: bytes,
+        blur: int,
+    ) -> dict[str, bool | int | str | None]:
+        try:
+            with Image.open(self._root / relative) as source:
+                source_size = source.size
+        except (OSError, UnidentifiedImageError) as error:
+            raise HTTPException(422, "source image could not be read") from error
+        normalized = normalize_png(data, expected_dimensions=source_size)
+        return self._write_normalized(relative, normalized, blur)
+
+    def _write_normalized(
+        self,
+        relative: Path,
+        normalized: bytes,
+        blur: int,
+    ) -> dict[str, bool | int | str | None]:
         updated_at = datetime.now(timezone.utc).isoformat()
         metadata = {
             "path": relative_text(relative),
@@ -217,7 +239,11 @@ class MaskStore:
         }
 
 
-def normalize_png(data: bytes) -> bytes:
+def normalize_png(
+    data: bytes,
+    *,
+    expected_dimensions: tuple[int, int] | None = None,
+) -> bytes:
     if not data:
         raise HTTPException(422, "mask PNG must not be empty")
     try:
@@ -231,7 +257,12 @@ def normalize_png(data: bytes) -> bytes:
                 if image.format != "PNG":
                     raise HTTPException(422, "mask body must be a PNG")
                 width, height = image.size
-                if not 0 < width <= MAX_MASK_DIMENSION or not 0 < height <= MAX_MASK_DIMENSION:
+                if expected_dimensions is not None and (width, height) != expected_dimensions:
+                    raise HTTPException(422, "generated mask dimensions must match the source image")
+                if (
+                    expected_dimensions is None
+                    and (not 0 < width <= MAX_MASK_DIMENSION or not 0 < height <= MAX_MASK_DIMENSION)
+                ):
                     raise HTTPException(422, "mask dimensions must not exceed 2048 pixels")
                 image.load()
                 rgba = image.convert("RGBA")

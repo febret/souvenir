@@ -2,6 +2,7 @@ import * as THREE from "three";
 
 import {
   disposeObject,
+  markInteractive,
   makeButton,
   makeCanvasTexture,
   makeLabelTexture,
@@ -98,9 +99,11 @@ export class MediaBrowserView extends THREE.Group {
     this.entries = [];
     this.rawEntries = [];
     this.navigationGeneration = 0;
-    this.viewMode = "thumbnails";
+    this.viewMode = "names";
     this.sortMode = "name";
     this.page = 0;
+    this.selectMode = false;
+    this.selectedIds = new Set();
     this.position.set(0, 1.35, -1.25);
     this.name = "media-browser";
     this.interactionTarget = {
@@ -126,7 +129,7 @@ export class MediaBrowserView extends THREE.Group {
       }),
     );
     this.backdrop.position.z = -0.012;
-    this.backdrop.userData.interactive = true;
+    markInteractive(this.backdrop);
     this.backdrop.userData.kind = "browser-surface";
     this.backdrop.userData.textureSize = this.backdrop.material.map.userData.canvasSize;
     this.add(this.backdrop);
@@ -136,6 +139,7 @@ export class MediaBrowserView extends THREE.Group {
       ["Page +", "browser-page-next"],
       ["View", "browser-view"],
       ["Sort", "browser-sort"],
+      ["Select", "browser-toggle-select-mode"],
       ["Filter Tags", "toggle-tag-filter"],
       ["Close", "browser-close"],
     ];
@@ -146,7 +150,7 @@ export class MediaBrowserView extends THREE.Group {
         height: 0.06,
         textureResolutionScale: BROWSER_TEXTURE_RESOLUTION,
       });
-      button.position.set(-0.38 + index * 0.152, 0.3, 0);
+      button.position.set(-0.45 + index * 0.15, 0.3, 0);
       button.userData.browser = this;
       button.userData.gestureTarget = false;
       this.controls.add(button);
@@ -267,6 +271,23 @@ export class MediaBrowserView extends THREE.Group {
       this.#renderEntries();
       return;
     }
+    if (action === "browser-toggle-select-mode") {
+      if (this.selectMode) {
+        const selected = this.#sortedEntries().filter((entry) => this.selectedIds.has(entry.path));
+        if (selected.length > 0) {
+          this.onSelect?.(selected[0], {
+            directory: this.path,
+            sortMode: this.sortMode,
+            viewMode: this.viewMode,
+            entries: selected,
+          });
+        }
+        this.selectedIds.clear();
+      }
+      this.selectMode = !this.selectMode;
+      this.#renderEntries();
+      return;
+    }
     if (action === "toggle-tag-filter") {
       try {
         this.directoryMenu.close();
@@ -283,6 +304,7 @@ export class MediaBrowserView extends THREE.Group {
     const next = constrainDirectory(path, this.selectedDirectories);
     const generation = ++this.navigationGeneration;
     this.page = 0;
+    this.selectedIds.clear();
     try {
       const payload = await this.api.directory(next, this.selectedDirectories);
       if (generation !== this.navigationGeneration) return;
@@ -307,6 +329,7 @@ export class MediaBrowserView extends THREE.Group {
     if (!allowed) return;
     const generation = ++this.navigationGeneration;
     this.page = 0;
+    this.selectedIds.clear();
     try {
       const payload = await this.api.directory(next, this.selectedDirectories);
       if (generation !== this.navigationGeneration) return;
@@ -342,11 +365,17 @@ export class MediaBrowserView extends THREE.Group {
   }
 
   setTagFilter(tagFilter) {
-    this.tagFilter = normalizeTagIds(tagFilter);
+    const nextFilter = normalizeTagIds(tagFilter);
+    if (this.tagFilter.length === nextFilter.length
+      && this.tagFilter.every((tagId, index) => tagId === nextFilter[index])) {
+      return false;
+    }
+    this.tagFilter = nextFilter;
     this.userData.tagFilter = [...this.tagFilter];
     this.filterMenu.setSelected(this.tagFilter);
     this.#applyTagFilter();
     this.#renderEntries();
+    return true;
   }
 
   updateEntryTags(path, tagIds) {
@@ -369,6 +398,12 @@ export class MediaBrowserView extends THREE.Group {
   async activateEntry(entry) {
     if (entry.kind === "directory") {
       await this.#setWorkingDirectory(entry.path);
+      return;
+    }
+    if (this.selectMode) {
+      if (this.selectedIds.has(entry.path)) this.selectedIds.delete(entry.path);
+      else this.selectedIds.add(entry.path);
+      this.#renderEntries();
       return;
     }
     this.onSelect?.(entry, {
@@ -477,13 +512,34 @@ export class MediaBrowserView extends THREE.Group {
         startY - cardHeight / 2 - row * (cardHeight + 0.012),
         0,
       );
-      card.userData.interactive = true;
+      markInteractive(card);
       card.userData.kind = "browser-entry";
       card.userData.entry = entry;
       card.userData.browser = this;
       card.userData.gestureTarget = false;
       card.userData.textureSize = card.material.map.userData.canvasSize;
       this.content.add(card);
+      if (this.selectMode) {
+        const selected = this.selectedIds.has(entry.path);
+        const mark = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.08, 0.034),
+          new THREE.MeshBasicMaterial({
+            map: makeLabelTexture(selected ? "☑" : "☐", {
+              width: 160,
+              height: 80,
+              font: "700 40px system-ui, sans-serif",
+              background: "rgba(10, 18, 16, 0.84)",
+              border: "rgba(96, 221, 143, 0.8)",
+              resolutionScale: BROWSER_TEXTURE_RESOLUTION,
+            }),
+            transparent: true,
+            side: THREE.DoubleSide,
+          }),
+        );
+        mark.position.set(cardWidth * 0.33, cardHeight * 0.37, 0.004);
+        mark.userData.gestureTarget = false;
+        card.add(mark);
+      }
 
       if (this.viewMode !== "names") {
         card.material.map.dispose();
@@ -517,8 +573,9 @@ export class MediaBrowserView extends THREE.Group {
     }
 
     const previousMap = this.backdrop.material.map;
+    const selectLabel = this.selectMode ? ` · select ${this.selectedIds.size}` : "";
     this.backdrop.material.map = backdropTexture(
-      `${this.path || "Media home"} · ${this.viewMode} · ${this.sortMode} · ${this.tagFilter.length ? `${this.tagFilter.length} tags · ` : ""}${this.page + 1}/${pageCount}`,
+      `${this.path || "Media home"} · ${this.viewMode} · ${this.sortMode}${selectLabel} · ${this.tagFilter.length ? `${this.tagFilter.length} tags · ` : ""}${this.page + 1}/${pageCount}`,
     );
     this.backdrop.material.needsUpdate = true;
     this.backdrop.userData.textureSize = this.backdrop.material.map.userData.canvasSize;

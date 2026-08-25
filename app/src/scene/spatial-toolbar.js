@@ -7,26 +7,27 @@ import {
 } from "../core/environment-mode.js";
 import {
   disposeObject,
+  markInteractive,
   makeButton,
   makeCanvasTexture,
   roundedRect,
   setButtonState,
 } from "./canvas-ui.js";
 
-export const TOOLBAR_WIDTH = 1.06;
-export const TOOLBAR_HEIGHT = 0.22;
+export const TOOLBAR_WIDTH = 1.08;
+export const TOOLBAR_HEIGHT = 0.3;
 export const TOOLBAR_TEXTURE_RESOLUTION = 2;
-const TOOLBAR_TITLE = "PANEL CONTROLS";
+const TOOLBAR_TITLE = "PANELS";
 const MENU_WIDTH = 0.46;
 const MENU_HEIGHT = 0.49;
 
 function makeToolbarTexture() {
   return makeCanvasTexture({
     width: 1200,
-    height: 300,
+    height: 360,
     resolutionScale: TOOLBAR_TEXTURE_RESOLUTION,
     draw(context, canvas) {
-      const titleHeight = 82;
+      const titleHeight = 78;
 
       context.clearRect(0, 0, canvas.width, canvas.height);
       roundedRect(context, 3, 3, canvas.width - 6, canvas.height - 6, 24);
@@ -50,7 +51,7 @@ function makeToolbarTexture() {
       context.stroke();
 
       context.fillStyle = "#eff8f3";
-      context.font = "700 34px system-ui, sans-serif";
+      context.font = "700 33px system-ui, sans-serif";
       context.textAlign = "left";
       context.textBaseline = "middle";
       context.letterSpacing = "2px";
@@ -67,6 +68,10 @@ function exposeTextureSize(mesh) {
   mesh.userData.textureResolutionScale = texture.userData.resolutionScale;
 }
 
+function clampScale(value, min = 0.6, max = 2.2) {
+  return Math.min(max, Math.max(min, value));
+}
+
 export class SpatialToolbar extends THREE.Group {
   constructor({ environmentMode } = {}) {
     super();
@@ -77,7 +82,15 @@ export class SpatialToolbar extends THREE.Group {
       onGesture: (gesture) => this.applyGesture(gesture),
     };
     this.userData.gestureTarget = this.interactionTarget;
+    this.userData.manipulation = {
+      type: "toolbar",
+      scalable: true,
+      scaleLimits: { min: 0.6, max: 2.2 },
+    };
     this.environmentMode = normalizeEnvironmentMode(environmentMode);
+    this.panelEntries = [];
+    this.focusedPanelId = null;
+    this.zenMode = false;
 
     this.backdrop = new THREE.Mesh(
       new THREE.PlaneGeometry(TOOLBAR_WIDTH, TOOLBAR_HEIGHT),
@@ -89,7 +102,7 @@ export class SpatialToolbar extends THREE.Group {
     );
     this.backdrop.name = "spatial-toolbar-surface";
     this.backdrop.position.z = -0.01;
-    this.backdrop.userData.interactive = true;
+    markInteractive(this.backdrop);
     this.backdrop.userData.kind = "toolbar-surface";
     this.backdrop.userData.title = TOOLBAR_TITLE;
     exposeTextureSize(this.backdrop);
@@ -100,55 +113,72 @@ export class SpatialToolbar extends THREE.Group {
     this.controls.position.z = 0.01;
     this.add(this.controls);
 
-    this.addButton = makeButton("Add panel", "add-panel", {
-      width: 0.2,
-      height: 0.065,
+    this.panelStrip = new THREE.Group();
+    this.panelStrip.position.set(-0.39, 0.01, 0);
+    this.controls.add(this.panelStrip);
+
+    this.addButton = makeButton("➕", "add-panel", {
+      width: 0.075,
+      height: 0.058,
       textureResolutionScale: TOOLBAR_TEXTURE_RESOLUTION,
     });
-    this.addButton.position.set(-0.39, -0.045, 0);
+    this.addButton.position.set(0.27, 0.01, 0);
     this.addButton.userData.gestureTarget = false;
     exposeTextureSize(this.addButton);
     this.controls.add(this.addButton);
 
-    this.removeButton = makeButton("Remove", "remove-panel", {
-      width: 0.18,
-      height: 0.065,
+    this.removeButton = makeButton("❌", "remove-panel", {
+      width: 0.075,
+      height: 0.058,
       foreground: "#ffc6b7",
       border: "#6d453b",
       textureResolutionScale: TOOLBAR_TEXTURE_RESOLUTION,
     });
-    this.removeButton.position.set(0.39, -0.045, 0);
+    this.removeButton.position.set(0.36, 0.01, 0);
     this.removeButton.userData.gestureTarget = false;
     exposeTextureSize(this.removeButton);
     this.controls.add(this.removeButton);
 
-    this.environmentButton = makeButton("Set Environment", "toggle-environment-menu", {
-      width: 0.24,
-      height: 0.065,
+    this.zenButton = makeButton("Zen", "toggle-zen-mode", {
+      width: 0.1,
+      height: 0.058,
       textureResolutionScale: TOOLBAR_TEXTURE_RESOLUTION,
     });
-    this.environmentButton.position.set(0, -0.045, 0);
-    this.environmentButton.userData.gestureTarget = false;
-    exposeTextureSize(this.environmentButton);
-    this.controls.add(this.environmentButton);
+    this.zenButton.position.set(0.47, 0.01, 0);
+    this.zenButton.userData.gestureTarget = false;
+    exposeTextureSize(this.zenButton);
+    this.controls.add(this.zenButton);
 
     this.commentaryButton = makeButton("Commentary", "toggle-commentary", {
       width: 0.22,
+      height: 0.055,
       textureResolutionScale: TOOLBAR_TEXTURE_RESOLUTION,
     });
-    this.commentaryButton.position.set(-0.16, -0.045, 0);
+    this.commentaryButton.position.set(-0.14, -0.092, 0);
     this.commentaryButton.userData.gestureTarget = false;
     this.commentaryButton.userData.activationOnly = true;
     exposeTextureSize(this.commentaryButton);
     this.controls.add(this.commentaryButton);
 
-    this.environmentButton.position.set(0.16, -0.045, 0);
+    this.environmentButton = makeButton("Set Environment", "toggle-environment-menu", {
+      width: 0.24,
+      height: 0.055,
+      textureResolutionScale: TOOLBAR_TEXTURE_RESOLUTION,
+    });
+    this.environmentButton.position.set(0.14, -0.092, 0);
+    this.environmentButton.userData.gestureTarget = false;
+    exposeTextureSize(this.environmentButton);
+    this.controls.add(this.environmentButton);
+
     this.environmentMenu = this.#createEnvironmentMenu();
-    this.environmentMenu.position.set(0, -0.39, 0.015);
+    this.environmentMenu.position.set(0, -0.44, 0.015);
     this.environmentMenu.visible = false;
     this.add(this.environmentMenu);
+
     this.setEnvironmentMode(this.environmentMode);
     this.setCommentaryState({ available: false, enabled: false, playing: false });
+    this.setPanels([], null);
+    this.setZenMode(false);
   }
 
   #createEnvironmentMenu() {
@@ -183,7 +213,7 @@ export class SpatialToolbar extends THREE.Group {
     backdrop.name = "environment-menu-background";
     backdrop.position.z = -0.01;
     backdrop.userData.gestureTarget = false;
-    backdrop.userData.interactive = true;
+    markInteractive(backdrop);
     backdrop.userData.kind = "environment-menu-background";
     backdrop.userData.title = "ENVIRONMENT";
     exposeTextureSize(backdrop);
@@ -209,6 +239,41 @@ export class SpatialToolbar extends THREE.Group {
       menu.add(button);
     }
     return menu;
+  }
+
+  setPanels(entries, focusedId) {
+    this.panelEntries = Array.isArray(entries) ? entries : [];
+    this.focusedPanelId = typeof focusedId === "string" ? focusedId : null;
+    disposeObject(this.panelStrip);
+    this.panelStrip.clear();
+    const pillWidth = 0.075;
+    const spacing = 0.082;
+    const count = Math.min(8, this.panelEntries.length);
+    for (let index = 0; index < count; index += 1) {
+      const entry = this.panelEntries[index];
+      const active = entry.id === this.focusedPanelId;
+      const button = makeButton(String(entry.number ?? index + 1), `focus-panel:${entry.id}`, {
+        width: pillWidth,
+        height: 0.052,
+        textureWidth: 260,
+        background: entry.color ?? "#3b564d",
+        border: active ? "#eafff2" : "#1d2926",
+        foreground: "#0b1713",
+        textureResolutionScale: TOOLBAR_TEXTURE_RESOLUTION,
+      });
+      button.position.set(index * spacing, 0, 0);
+      button.userData.gestureTarget = false;
+      exposeTextureSize(button);
+      this.panelStrip.add(button);
+    }
+    this.removeButton.userData.interactive = Boolean(this.focusedPanelId);
+    this.removeButton.material.color.set(this.focusedPanelId ? 0xffffff : 0x66716d);
+  }
+
+  setZenMode(enabled) {
+    this.zenMode = Boolean(enabled);
+    setButtonState(this.zenButton, { active: this.zenMode });
+    return this.zenMode;
   }
 
   setEnvironmentMode(mode) {
@@ -252,6 +317,24 @@ export class SpatialToolbar extends THREE.Group {
   }
 
   applyGesture(gesture) {
+    if (gesture?.absolutePose) {
+      const position = gesture.absolutePose.position ?? {};
+      const rotation = gesture.absolutePose.rotation ?? {};
+      if ([position.x, position.y, position.z].every(Number.isFinite)) {
+        this.position.set(position.x, position.y, position.z);
+      }
+      if ([rotation.x, rotation.y, rotation.z].every(Number.isFinite)) {
+        this.rotation.set(rotation.x, rotation.y, rotation.z);
+      }
+      const requestedScale = gesture.absoluteObjectScale ?? gesture.scaleFactor;
+      const value = typeof requestedScale === "number" ? requestedScale : requestedScale?.x;
+      if (Number.isFinite(value)) this.scale.setScalar(clampScale(value));
+      return;
+    }
+    if (gesture?.hands === 2 && Number.isFinite(gesture?.scale)) {
+      this.scale.setScalar(clampScale(this.scale.x * gesture.scale));
+      return;
+    }
     if (gesture?.hands !== 1) return;
     const translation = gesture.translation ?? {};
     const rotation = gesture.rotation ?? {};

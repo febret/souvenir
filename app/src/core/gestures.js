@@ -1,8 +1,6 @@
 const DEFAULT_LIMITS = Object.freeze({
   position: 50,
   dimensions: { minWidth: 0.2, maxWidth: 5, minHeight: 0.15, maxHeight: 5 },
-  contentPan: 3,
-  contentZoom: { min: 0.25, max: 8 },
 });
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -20,7 +18,6 @@ function resolvedLimits(limits) {
     ...DEFAULT_LIMITS,
     ...limits,
     dimensions: { ...DEFAULT_LIMITS.dimensions, ...limits?.dimensions },
-    contentZoom: { ...DEFAULT_LIMITS.contentZoom, ...limits?.contentZoom },
   };
 }
 
@@ -40,20 +37,30 @@ export function updateInteractionState(state, event) {
   return current;
 }
 
-export function interactionMode(panel, hands) {
+/**
+ * Resolves the interaction mode for a panel given the number of pinching
+ * hands.
+ *
+ * Unlocked panels move with one hand and move/reorient/rescale with two.
+ * Locked panels ignore one-hand movement (the interaction layer treats a
+ * single-hand pinch as next-media advance) and only rescale with two hands.
+ * In Zen mode panels are fully locked: one-hand pinch still advances media,
+ * two-hand pinches do nothing.
+ */
+export function interactionMode(panel, hands, { zen = false } = {}) {
   if (!panel || hands < 1) return "none";
-  if (panel.minimized) return hands === 1 ? "minimized-move" : "none";
-  if (panel.locked || panel.zoomMode) return hands === 1 ? "content-pan" : "content-zoom";
-  return hands === 1 ? "panel-transform" : "panel-resize";
+  if (zen) return hands === 1 ? "next-media" : "none";
+  if (panel.locked) return hands === 1 ? "next-media" : "panel-rescale";
+  return "panel-transform";
 }
 
-export function applyPanelGesture(panel, gesture, limits = {}) {
+export function applyPanelGesture(panel, gesture, limits = {}, options = {}) {
   if (!panel || !gesture) return panel ? copy(panel) : null;
   const result = copy(panel);
   const bound = resolvedLimits(limits);
-  const mode = interactionMode(result, gesture.hands);
+  const mode = interactionMode(result, gesture.hands, options);
 
-  if (mode === "panel-transform" || mode === "minimized-move") {
+  if (mode === "panel-transform") {
     const movement = delta(gesture.translation);
     const rotation = delta(gesture.rotation);
     result.transform.position.x = clamp(result.transform.position.x + movement.x, -bound.position, bound.position);
@@ -62,19 +69,16 @@ export function applyPanelGesture(panel, gesture, limits = {}) {
     result.transform.rotation.x = wrappedAngle(result.transform.rotation.x + rotation.x);
     result.transform.rotation.y = wrappedAngle(result.transform.rotation.y + rotation.y);
     result.transform.rotation.z = wrappedAngle(result.transform.rotation.z + rotation.z);
-  } else if (mode === "panel-resize") {
+    if (Number.isFinite(gesture.scale) && gesture.scale > 0 && gesture.scale !== 1) {
+      result.dimensions.width = clamp(result.dimensions.width * gesture.scale, bound.dimensions.minWidth, bound.dimensions.maxWidth);
+      result.dimensions.height = clamp(result.dimensions.height * gesture.scale, bound.dimensions.minHeight, bound.dimensions.maxHeight);
+    }
+  } else if (mode === "panel-rescale") {
     const scale = clamp(numeric(gesture.scale) || 1, 0.01, 100);
     result.dimensions.width = clamp(result.dimensions.width * scale, bound.dimensions.minWidth, bound.dimensions.maxWidth);
     result.dimensions.height = clamp(result.dimensions.height * scale, bound.dimensions.minHeight, bound.dimensions.maxHeight);
-    result.restoreDimensions = copy(result.dimensions);
-  } else if (mode === "content-pan") {
-    const movement = delta(gesture.translation);
-    result.content.pan.x = clamp(result.content.pan.x + movement.x, -bound.contentPan, bound.contentPan);
-    result.content.pan.y = clamp(result.content.pan.y + movement.y, -bound.contentPan, bound.contentPan);
-    result.content.pan.z = clamp(result.content.pan.z + movement.z, -bound.contentPan, bound.contentPan);
-  } else if (mode === "content-zoom") {
-    const scale = clamp(numeric(gesture.scale) || 1, 0.01, 100);
-    result.content.zoom = clamp(result.content.zoom * scale, bound.contentZoom.min, bound.contentZoom.max);
   }
+  // "next-media" and "none" modes leave the panel state untouched; media
+  // navigation is handled by the interaction layer on pinch release.
   return result;
 }

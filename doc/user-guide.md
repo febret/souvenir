@@ -354,14 +354,21 @@ Souvenir can save one reusable transparency mask for each picture or video:
 4. Use the **Blur** slider to soften or sharpen the edge around the complete
    mask. The painted mask remains binary and fully erased; blur only feathers
    its outer boundary.
-5. Choose **Apply** to save and activate the mask, **Cancel** to discard the
+5. Choose **Auto Mask** to request a server-generated background mask for the
+   current picture. While generation is in progress, the mask is locked, grayed
+   out, and outlined with a pulsing glow; choose **Auto Mask** again to cancel.
+6. Choose **Apply** to save and activate the mask, **Cancel** to discard the
    current edit, or **Clear**, then **Apply**, to delete the saved mask.
 
 Panel movement and media navigation are disabled while drawing. Starting the
 editor stops that panel's slideshow; changing media cancels an unfinished edit
 instead of saving it to the wrong file.
 
-Applied masks work with both pictures and videos. The server stores normalized
+Auto Mask is available for pictures only, but applied masks work with both
+pictures and videos. To reduce GPU memory and processing time, the server runs
+segmentation on an aspect-preserving copy no larger than 512 pixels on either
+axis, restores the generated mask to the source picture dimensions, and then
+softens its edges. The server stores normalized
 mask PNGs and blur metadata under
 `<media home>/.souvenir-masks/`. This internal folder is not exposed in the
 gallery. Include it when backing up the media home if you want to preserve

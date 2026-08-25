@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  ASPECT_RATIO_MODES,
-  DEFAULT_ASPECT_RATIO_MODE,
-} from "../../app/src/core/aspect-ratio.js";
-import {
-  MINIMIZED_DIMENSIONS,
+  DEFAULT_SAVE_MODE,
+  SAVE_MODES,
+  normalizeSaveMode,
   restorePanel,
 } from "../../app/src/core/panel-store.js";
 import { normalizeTagIds } from "../../app/src/core/tags.js";
@@ -26,41 +24,12 @@ describe("panel model and store", () => {
     expect(store.focus("missing")).toBe(false);
   });
 
-  it("minimizes to fixed dimensions and restores the saved dimensions", () => {
+  it("defaults save mode to scale and normalizes malformed modes", () => {
     const store = new PanelStore({ idFactory: () => "one" });
-    store.add({ dimensions: { width: 2, height: 1 } });
-    store.setTransform("one", { position: { x: 1, y: 2, z: 3 } });
-    store.setContentPan("one", { x: 0.5, y: 0 });
-    store.setContentZoom("one", 2);
-    store.minimize("one");
-    expect(store.getState().panels[0].dimensions).toEqual(MINIMIZED_DIMENSIONS);
-    store.restore("one");
-    expect(store.getState().panels[0]).toMatchObject({
-      dimensions: { width: 2, height: 1 },
-      transform: { position: { x: 1, y: 2, z: 3 } },
-      content: { pan: { x: 0.5, y: 0, z: 0 }, zoom: 2 },
-    });
-  });
-
-  it("retains clamped locked content zoom and pan while minimized and restored", () => {
-    const store = new PanelStore({ idFactory: () => "one" });
-    store.add({
-      locked: true,
-      content: { pan: { x: 0.5, y: -0.25, z: 0 }, zoom: 2 },
-      dimensions: { width: 2, height: 1 },
-    });
-    store.setContentPan("one", { x: 1, y: 2, z: 3 });
-    store.setContentZoom("one", 100);
-    store.minimize("one");
-    store.setContentZoom("one", 0);
-    store.restore("one");
-
-    expect(store.getState().panels[0]).toMatchObject({
-      locked: true,
-      minimized: false,
-      dimensions: { width: 2, height: 1 },
-      content: { pan: { x: 1, y: 2, z: 3 }, zoom: 0.25 },
-    });
+    expect(store.add().saveMode).toBe(DEFAULT_SAVE_MODE);
+    expect(SAVE_MODES).toEqual(["disabled", "scale", "full"]);
+    expect(normalizeSaveMode("broken")).toBe(DEFAULT_SAVE_MODE);
+    expect(normalizeSaveMode("full")).toBe("full");
   });
 
   it("defensively clears unavailable media during restoration", () => {
@@ -75,16 +44,90 @@ describe("panel model and store", () => {
     store.setMedia("one", "beach");
     store.setDimensions("one", { width: 2, height: 1.4 });
 
-    // Switching away records the outgoing media's panel scale.
+    // Switching away records the outgoing media's saved scale.
     store.setMedia("one", "other");
-    expect(store.getState().panels[0].mediaScales.beach).toEqual({ width: 2, height: 1.4 });
+    expect(store.getState().panels[0].mediaPoses.beach.scale).toEqual({ width: 2, height: 1.4 });
 
-    // Switching back restores that media's own panel scale.
+    // Switching back restores that media's own scale.
     store.setMedia("one", "beach");
     expect(store.getState().panels[0].dimensions).toEqual({ width: 2, height: 1.4 });
   });
 
-  it("keeps independent scales for different media and serializes them", () => {
+  it("saves and restores the full pose only in full save mode", () => {
+    const store = new PanelStore({ media, idFactory: () => "one" });
+    store.add({ saveMode: "full" });
+    store.setDirectory("one", "photos");
+    store.setMedia("one", "beach");
+    store.setTransform("one", { position: { x: 1, y: 2, z: -3 }, rotation: { y: 0.5 } });
+    store.setDimensions("one", { width: 2, height: 1.4 });
+
+    store.setMedia("one", "other");
+    const pose = store.getState().panels[0].mediaPoses.beach;
+    expect(pose.transform.position).toEqual({ x: 1, y: 2, z: -3 });
+    expect(pose.transform.rotation.y).toBeCloseTo(0.5);
+    expect(pose.scale).toEqual({ width: 2, height: 1.4 });
+
+    // Restoring brings back both scale and pose.
+    store.setMedia("one", "beach");
+    expect(store.getState().panels[0]).toMatchObject({
+      dimensions: { width: 2, height: 1.4 },
+      transform: { position: { x: 1, y: 2, z: -3 }, rotation: { y: 0.5 } },
+    });
+  });
+
+  it("never restores poses in disabled save mode", () => {
+    const store = new PanelStore({
+      media,
+      idFactory: () => "one",
+      panels: [{
+        id: "one",
+        saveMode: "disabled",
+        dimensions: { width: 2, height: 1.4 },
+        transform: { position: { x: 5, y: 0, z: -1 } },
+        mediaPoses: { beach: { scale: { width: 0.5, height: 0.25 }, transform: { position: { x: 9, y: 9, z: 9 }, rotation: { y: 1 } } } },
+      }],
+    });
+    store.setMedia("one", "beach");
+    const panel = store.getState().panels[0];
+    expect(panel.dimensions).toEqual({ width: 2, height: 1.4 });
+    expect(panel.transform.position.x).toBe(5);
+    expect(panel.mediaPoses).toEqual({});
+  });
+
+  it("drops per-media poses when downgrading save mode to disabled", () => {
+    const store = new PanelStore({ media, idFactory: () => "one" });
+    store.add();
+    store.setDirectory("one", "photos");
+    store.setMedia("one", "beach");
+    store.setDimensions("one", { width: 2, height: 1.4 });
+    expect(Object.keys(store.getState().panels[0].mediaPoses)).toEqual(["beach"]);
+
+    store.setSaveMode("one", "disabled");
+    expect(store.getState().panels[0].mediaPoses).toEqual({});
+    expect(store.setSaveMode("missing", "full")).toBeNull();
+
+    // Upgrading re-records the current media immediately.
+    store.setSaveMode("one", "full");
+    expect(store.getState().panels[0].mediaPoses.beach.transform).toBeDefined();
+  });
+
+  it("migrates legacy mediaScales into scale-only media poses", () => {
+    const store = new PanelStore({
+      media,
+      panels: [{
+        id: "one",
+        mediaScales: { beach: { width: 2, height: 1.4 } },
+      }],
+    });
+    expect(store.getState().panels[0].mediaPoses.beach)
+      .toMatchObject({ scale: { width: 2, height: 1.4 } });
+
+    // Switching back restores the migrated scale.
+    store.setMedia("one", "beach");
+    expect(store.getState().panels[0].dimensions).toEqual({ width: 2, height: 1.4 });
+  });
+
+  it("keeps independent poses for different media and serializes them", () => {
     const store = new PanelStore({ media, idFactory: () => "one" });
     store.add();
     store.setDirectory("one", "photos");
@@ -93,16 +136,16 @@ describe("panel model and store", () => {
     store.setMedia("one", "cliff");
     store.setDimensions("one", { width: 0.8, height: 0.6 });
 
-    expect(store.getState().panels[0].mediaScales).toMatchObject({
-      beach: { width: 2, height: 1.4 },
-      cliff: { width: 0.8, height: 0.6 },
+    expect(store.getState().panels[0].mediaPoses).toMatchObject({
+      beach: { scale: { width: 2, height: 1.4 } },
+      cliff: { scale: { width: 0.8, height: 0.6 } },
     });
 
     const serialized = JSON.parse(JSON.stringify(store.getState()));
     const restored = new PanelStore(serialized);
-    expect(restored.getState().panels[0].mediaScales).toMatchObject({
-      beach: { width: 2, height: 1.4 },
-      cliff: { width: 0.8, height: 0.6 },
+    expect(restored.getState().panels[0].mediaPoses).toMatchObject({
+      beach: { scale: { width: 2, height: 1.4 } },
+      cliff: { scale: { width: 0.8, height: 0.6 } },
     });
   });
 
@@ -133,17 +176,62 @@ describe("panel model and store", () => {
     expect(snapshots).toHaveLength(3);
   });
 
-  it("serializes, restores, and validates the display mode through the store setter", () => {
+  it("does not publish idempotent focus or pose updates", () => {
     const store = new PanelStore({ idFactory: () => "one" });
-    expect(store.add().displayMode).toBe("fit");
-    expect(store.setDisplayMode("one", "actual")).toMatchObject({ displayMode: "actual" });
+    store.add();
+    const changes = [];
+    const unsubscribe = store.subscribe((_state, change) => changes.push(change));
 
-    const serialized = JSON.parse(JSON.stringify(store.getState()));
-    const restored = new PanelStore(serialized);
-    expect(restored.getState().panels[0].displayMode).toBe("actual");
+    expect(store.focus("one")).toBe(true);
+    store.setPose("one", {
+      transform: {
+        position: { x: 0, y: 0, z: -1 },
+        rotation: { x: 0, y: 0, z: 0 },
+      },
+      dimensions: { width: 1.2, height: 0.8 },
+    });
+    expect(changes).toEqual([]);
 
-    expect(restored.setDisplayMode("one", "not-a-mode")).toMatchObject({ displayMode: "fit" });
-    expect(restored.setDisplayMode("missing", "fill")).toBeNull();
+    store.setPose("one", {
+      transform: {
+        position: { x: 0.2, y: 1, z: -1.5 },
+        rotation: { x: 0, y: 0.1, z: 0 },
+      },
+      dimensions: { width: 1.4, height: 0.9 },
+    });
+    unsubscribe();
+
+    expect(changes).toEqual([{ type: "panel", panelIds: ["one"] }]);
+    expect(store.getState().panels[0]).toMatchObject({
+      transform: {
+        position: { x: 0.2, y: 1, z: -1.5 },
+        rotation: { x: 0, y: 0.1, z: 0 },
+      },
+      dimensions: { width: 1.4, height: 0.9 },
+    });
+  });
+
+  it("minimizes and restores panel dimensions without losing its pose", () => {
+    const store = new PanelStore({ idFactory: () => "one" });
+    store.add({
+      dimensions: { width: 1.8, height: 1.2 },
+      transform: { position: { x: 0.3, y: 1.4, z: -1.6 } },
+    });
+
+    expect(store.minimize("one")).toMatchObject({
+      minimized: true,
+      dimensions: { width: 0.28, height: 0.18 },
+      restoreDimensions: { width: 1.8, height: 1.2 },
+    });
+    expect(store.getState().panels[0].transform.position).toMatchObject({
+      x: 0.3,
+      y: 1.4,
+      z: -1.6,
+    });
+    expect(store.restore("one")).toMatchObject({
+      minimized: false,
+      dimensions: { width: 1.8, height: 1.2 },
+    });
   });
 
   it("defaults mask visibility on, persists it, and isolates the mask setter to its panel", () => {
@@ -159,45 +247,6 @@ describe("panel model and store", () => {
     expect(restored.getState().panels[0].maskEnabled).toBe(false);
     expect(restored.setMaskEnabled("panel-1", true)).toMatchObject({ maskEnabled: true });
     expect(restored.setMaskEnabled("missing", false)).toBeNull();
-  });
-
-  it("persists, restores, and validates aspect ratio modes through the store setter", () => {
-    const store = new PanelStore({ idFactory: () => "one" });
-    expect(store.add().aspectRatioMode).toBe(DEFAULT_ASPECT_RATIO_MODE);
-    expect(store.setAspectRatioMode("one", ASPECT_RATIO_MODES.SIXTEEN_NINE))
-      .toMatchObject({ aspectRatioMode: ASPECT_RATIO_MODES.SIXTEEN_NINE });
-
-    const serialized = JSON.parse(JSON.stringify(store.getState()));
-    const restored = new PanelStore(serialized);
-    expect(restored.getState().panels[0].aspectRatioMode)
-      .toBe(ASPECT_RATIO_MODES.SIXTEEN_NINE);
-    expect(restored.setAspectRatioMode("one", "broken"))
-      .toMatchObject({ aspectRatioMode: DEFAULT_ASPECT_RATIO_MODE });
-    expect(restored.setAspectRatioMode("missing", ASPECT_RATIO_MODES.SQUARE)).toBeNull();
-  });
-
-  it("defaults malformed restored aspect ratio modes and retains ratio dimensions while minimized", () => {
-    const store = new PanelStore({
-      panels: [{
-        id: "one",
-        aspectRatioMode: "unsupported",
-        dimensions: { width: 1.2, height: 0.8 },
-      }],
-    });
-    expect(store.getState().panels[0].aspectRatioMode).toBe(DEFAULT_ASPECT_RATIO_MODE);
-
-    store.minimize("one");
-    store.setAspectRatioMode("one", ASPECT_RATIO_MODES.NINE_SIXTEEN);
-    store.setDimensions("one", { width: 1.2, height: 2.1333333333333333 });
-    expect(store.getState().panels[0]).toMatchObject({
-      minimized: true,
-      dimensions: MINIMIZED_DIMENSIONS,
-      aspectRatioMode: ASPECT_RATIO_MODES.NINE_SIXTEEN,
-      restoreDimensions: { width: 1.2, height: 2.1333333333333333 },
-    });
-    store.restore("one");
-    expect(store.getState().panels[0].dimensions)
-      .toEqual({ width: 1.2, height: 2.1333333333333333 });
   });
 
   it("defaults, normalizes, persists, and updates panel tag filters through the store", () => {

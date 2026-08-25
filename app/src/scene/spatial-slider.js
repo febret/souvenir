@@ -1,6 +1,6 @@
 import * as THREE from "three";
 
-import { makeCanvasTexture, roundedRect } from "./canvas-ui.js";
+import { markInteractive, makeCanvasTexture, roundedRect } from "./canvas-ui.js";
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const TEXTURE_WIDTH = 720;
@@ -37,7 +37,7 @@ export class SpatialSlider extends THREE.Group {
         toneMapped: false,
       }),
     );
-    this.track.userData.interactive = true;
+    markInteractive(this.track);
     this.track.userData.kind = "slider";
     this.track.userData.action = action;
     this.track.userData.label = title;

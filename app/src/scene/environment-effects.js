@@ -36,14 +36,17 @@ function colorValue(value) {
   return new THREE.Color(value ?? 0x000000);
 }
 
-export function cameraWorldCenter(camera, target = new THREE.Vector3()) {
+export function cameraWorldCenter(
+  camera,
+  target = new THREE.Vector3(),
+  eyePosition = new THREE.Vector3(),
+) {
   const cameras = Array.isArray(camera?.cameras) ? camera.cameras : [];
   if (cameras.length === 0) {
     camera?.updateMatrixWorld?.();
     return camera?.getWorldPosition ? camera.getWorldPosition(target) : target.set(0, 0, 0);
   }
   target.set(0, 0, 0);
-  const eyePosition = new THREE.Vector3();
   for (const eye of cameras) {
     eye.updateMatrixWorld?.();
     eye.getWorldPosition(eyePosition);
@@ -88,6 +91,7 @@ export class EnvironmentEffects {
       fragmentShader: OVERLAY_FRAGMENT_SHADER,
     });
     this.mesh = new THREE.Mesh(new THREE.SphereGeometry(20, 48, 32), this.material);
+    this.eyePosition = new THREE.Vector3();
     this.mesh.name = "environment-background-overlay";
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = -1000;
@@ -107,7 +111,7 @@ export class EnvironmentEffects {
   }
 
   update(time, camera) {
-    cameraWorldCenter(camera, this.mesh.position);
+    cameraWorldCenter(camera, this.mesh.position, this.eyePosition);
     this.material.uniforms.uTime.value = (Number.isFinite(time) ? time : 0) * 0.001;
   }
 
@@ -140,6 +144,11 @@ export class EnvironmentEffects {
       renderer.autoClear = false;
       renderer.setClearColor(0x000000, 0);
       renderer.clear(true, true, true);
+      if (!this.mesh.visible) {
+        renderer.render(mainScene, camera);
+        this.renderPasses.main += 1;
+        return;
+      }
       renderer.render(this.scene, camera);
       this.renderPasses.background += 1;
       renderer.clearDepth();

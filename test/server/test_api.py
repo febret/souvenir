@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 import logging
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,13 @@ from PIL import Image
 import server.application as application
 import server.masks as masks_module
 from server.application import create_app
+from server.auto_mask import (
+    AUTO_MASK_INFERENCE_MAX_DIMENSION,
+    BiRefNetAutoMaskGenerator,
+    _background_mask,
+    _inference_image,
+)
+from server.depth_maps import MAX_DEPTH_MAP_BYTES
 from server.library import LibraryScanProgress, scan_media_library
 from server.masks import MAX_MASK_BYTES
 
@@ -39,10 +47,141 @@ def _png_bytes(
     size: tuple[int, int] = (12, 8),
     mode: str = "RGBA",
 ) -> bytes:
-    image = Image.new(mode, size, color[:3] if mode == "RGB" else color)
+    if mode == "RGB":
+        fill = color[:3]
+    elif mode == "L":
+        fill = color[0]
+    else:
+        fill = color
+    image = Image.new(mode, size, fill)
     output = BytesIO()
     image.save(output, format="PNG")
     return output.getvalue()
+
+
+class FakeAutoMaskGenerator:
+    def __init__(
+        self,
+        *,
+        payload: bytes | None = None,
+        device: str = "cuda",
+        started: threading.Event | None = None,
+        release: threading.Event | None = None,
+    ) -> None:
+        self.payload = payload or _png_bytes((255, 255, 255, 255), size=(20, 10))
+        self.device = device
+        self.started = started
+        self.release = release
+        self.calls = 0
+
+    def generate(self, source: Path) -> tuple[bytes, str]:
+        self.calls += 1
+        if self.started is not None:
+            self.started.set()
+        if self.release is not None:
+            self.release.wait(timeout=2)
+        return self.payload, self.device
+
+    def close(self) -> None:
+        return None
+
+
+class FakeAutoDepthGenerator:
+    def __init__(
+        self,
+        *,
+        payload: bytes | None = None,
+        device: str = "cuda",
+        started: threading.Event | None = None,
+        release: threading.Event | None = None,
+    ) -> None:
+        self.payload = payload or _png_bytes(mode="L")
+        self.device = device
+        self.started = started
+        self.release = release
+        self.calls = 0
+        self.max_dimensions: list[int] = []
+
+    def generate(self, source: Path, *, max_dimension: int = 512) -> tuple[bytes, str]:
+        self.calls += 1
+        self.max_dimensions.append(max_dimension)
+        if self.started is not None:
+            self.started.set()
+        if self.release is not None:
+            self.release.wait(timeout=2)
+        return self.payload, self.device
+
+    def close(self) -> None:
+        return None
+
+
+def test_auto_mask_generator_reports_missing_runtime_dependencies(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "server.auto_mask._missing_runtime_dependencies",
+        lambda _packages: ["einops", "kornia", "timm"],
+    )
+    generator = BiRefNetAutoMaskGenerator()
+    with pytest.raises(RuntimeError, match="einops, kornia, timm"):
+        generator.generate(Path("albums/photo.jpg"))
+
+
+def test_auto_mask_scales_inference_image_to_512_preserving_aspect_ratio():
+    landscape = _inference_image(
+        Image.new("RGB", (1600, 900)),
+        AUTO_MASK_INFERENCE_MAX_DIMENSION,
+    )
+    portrait = _inference_image(
+        Image.new("RGB", (900, 1600)),
+        AUTO_MASK_INFERENCE_MAX_DIMENSION,
+    )
+    small = _inference_image(
+        Image.new("RGB", (320, 200)),
+        AUTO_MASK_INFERENCE_MAX_DIMENSION,
+    )
+
+    assert landscape.size == (512, 288)
+    assert portrait.size == (288, 512)
+    assert small.size == (320, 200)
+
+
+def test_auto_mask_upscales_to_source_size_before_softening_edges():
+    probability = Image.new("L", (512, 288), 0)
+    probability.paste(255, (0, 0, 256, 288))
+
+    hard = _background_mask(
+        probability,
+        (1600, 900),
+        threshold=0.48,
+        edge_feather=0,
+    )
+    softened = _background_mask(
+        probability,
+        (1600, 900),
+        threshold=0.48,
+        edge_feather=8,
+    )
+
+    assert hard.size == (1600, 900)
+    assert softened.size == (1600, 900)
+    assert softened.getpixel((790, 450)) != hard.getpixel((790, 450))
+    assert softened.getpixel((0, 450)) == 0
+    assert softened.getpixel((1599, 450)) == 255
+
+
+def test_generated_mask_storage_preserves_source_dimensions_above_manual_limit(library: Path):
+    source = library / "albums" / "photo.jpg"
+    Image.new("RGB", (2560, 1440), "red").save(source)
+    store = masks_module.MaskStore(library)
+    relative = Path("albums/photo.jpg")
+
+    store.write_generated(
+        relative,
+        _png_bytes((255, 255, 255, 255), size=(2560, 1440)),
+        blur=0,
+    )
+
+    with Image.open(BytesIO(store.read(relative))) as mask:
+        assert mask.size == (2560, 1440)
 
 
 def test_health_and_directory_listing(client: TestClient):
@@ -352,6 +491,196 @@ def test_mask_storage_inconsistency_is_an_explicit_server_error(client: TestClie
     mask_path = next((library / ".souvenir-masks").glob("*.png"))
     mask_path.unlink()
     assert client.get("/api/mask-info", params={"path": "albums/photo.jpg"}).status_code == 500
+
+
+def test_auto_mask_queue_status_completion_and_device_reporting(library: Path):
+    generator = FakeAutoMaskGenerator(
+        payload=_png_bytes((255, 255, 255, 255), size=(20, 10)),
+        device="cuda",
+    )
+    with TestClient(create_app(library, auto_mask_generator=generator)) as client:
+        idle = client.get("/api/mask/auto", params={"path": "albums/photo.jpg"})
+        assert idle.status_code == 200
+        assert idle.json()["status"] == "idle"
+
+        started = client.post("/api/mask/auto", params={"path": "albums/photo.jpg"})
+        assert started.status_code == 200
+        assert started.json()["status"] in {"queued", "running"}
+
+        status = None
+        for _ in range(40):
+            status = client.get("/api/mask/auto", params={"path": "albums/photo.jpg"}).json()
+            if status["status"] == "completed":
+                break
+            time.sleep(0.05)
+        assert status is not None
+        assert status["status"] == "completed"
+        assert status["device"] == "cuda"
+        assert status["mask"]["exists"] is True
+        assert generator.calls == 1
+        assert client.get("/api/mask", params={"path": "albums/photo.jpg"}).status_code == 200
+
+
+def test_auto_mask_cancel_is_shared_for_same_image_path(library: Path):
+    started = threading.Event()
+    release = threading.Event()
+    generator = FakeAutoMaskGenerator(
+        payload=_png_bytes((255, 255, 255, 255), size=(20, 10)),
+        device="cuda",
+        started=started,
+        release=release,
+    )
+    with TestClient(create_app(library, auto_mask_generator=generator)) as client:
+        assert client.post("/api/mask/auto", params={"path": "albums/photo.jpg"}).status_code == 200
+        assert started.wait(1)
+        cancel = client.delete("/api/mask/auto", params={"path": "albums/photo.jpg"})
+        assert cancel.status_code == 200
+        release.set()
+        status = None
+        for _ in range(40):
+            status = client.get("/api/mask/auto", params={"path": "albums/photo.jpg"}).json()
+            if status["status"] == "cancelled":
+                break
+            time.sleep(0.05)
+        assert status is not None
+        assert status["status"] == "cancelled"
+        assert status["mask"]["exists"] is False
+        assert generator.calls == 1
+
+
+def test_auto_mask_rejects_non_image_media(client: TestClient):
+    response = client.post("/api/mask/auto", params={"path": "albums/movie.mp4"})
+    assert response.status_code == 404
+
+
+def test_depth_map_round_trip_and_size_validation(client: TestClient):
+    path = {"path": "albums/photo.jpg"}
+    png = _png_bytes(mode="L")
+    saved = client.put(
+        "/api/depth",
+        params=path,
+        content=png,
+        headers={"Content-Type": "image/png"},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["exists"] is True
+    assert client.get("/api/depth-info", params=path).json()["exists"] is True
+    fetched = client.get("/api/depth", params=path)
+    assert fetched.status_code == 200
+    assert fetched.headers["content-type"] == "image/png"
+    assert client.put(
+        "/api/depth",
+        params=path,
+        content=png,
+        headers={"Content-Type": "image/png", "Content-Length": str(MAX_DEPTH_MAP_BYTES + 1)},
+    ).status_code == 413
+    assert client.delete("/api/depth", params=path).status_code == 200
+    assert client.get("/api/depth-info", params=path).json()["exists"] is False
+
+
+def test_auto_depth_queue_status_completion_and_device_reporting(library: Path):
+    generator = FakeAutoDepthGenerator(payload=_png_bytes(mode="L"), device="cuda")
+    with TestClient(create_app(library, auto_depth_generator=generator)) as client:
+        idle = client.get("/api/depth/auto", params={"path": "albums/photo.jpg"})
+        assert idle.status_code == 200
+        assert idle.json()["status"] == "idle"
+
+        started = client.post("/api/depth/auto", params={"path": "albums/photo.jpg"})
+        assert started.status_code == 200
+        assert started.json()["status"] in {"queued", "running"}
+
+        status = None
+        for _ in range(40):
+            status = client.get("/api/depth/auto", params={"path": "albums/photo.jpg"}).json()
+            if status["status"] == "completed":
+                break
+            time.sleep(0.05)
+        assert status is not None
+        assert status["status"] == "completed"
+        assert status["device"] == "cuda"
+        assert status["depth"]["exists"] is True
+        assert generator.calls == 1
+        assert client.get("/api/depth", params={"path": "albums/photo.jpg"}).status_code == 200
+
+
+def test_adm_generation_requests_only_missing_artifacts(library: Path):
+    mask_generator = FakeAutoMaskGenerator(
+        payload=_png_bytes((255, 255, 255, 255), size=(20, 10)),
+    )
+    depth_generator = FakeAutoDepthGenerator(payload=_png_bytes(mode="L"))
+    with TestClient(
+        create_app(
+            library,
+            auto_mask_generator=mask_generator,
+            auto_depth_generator=depth_generator,
+        )
+    ) as client:
+        client.put(
+            "/api/mask",
+            params={"path": "albums/photo.jpg"},
+            content=_png_bytes(),
+            headers={"Content-Type": "image/png"},
+        )
+        start = client.post("/api/adm/auto", params={"path": "albums/photo.jpg"})
+        assert start.status_code == 200
+        status = None
+        for _ in range(40):
+            status = client.get("/api/adm/auto", params={"path": "albums/photo.jpg"}).json()
+            if status["status"] == "completed":
+                break
+            time.sleep(0.05)
+        assert status is not None
+        assert status["status"] == "completed"
+        assert mask_generator.calls == 0
+        assert depth_generator.calls == 1
+
+
+def test_media_adm_settings_persist_and_appear_in_listing(client: TestClient):
+    saved = client.put(
+        "/api/media-adm",
+        params={"path": "albums/photo.jpg"},
+        json={"enabled": True, "depth_intensity": 0.8},
+    )
+    assert saved.status_code == 200
+    assert saved.json() == {
+        "path": "albums/photo.jpg",
+        "configured": True,
+        "enabled": True,
+        "depth_intensity": 0.8,
+    }
+    loaded = client.get("/api/media-adm", params={"path": "albums/photo.jpg"})
+    assert loaded.status_code == 200
+    assert loaded.json()["enabled"] is True
+    listing = client.get("/api/media", params={"path": "albums"}).json()
+    photo = next(entry for entry in listing["files"] if entry["path"] == "albums/photo.jpg")
+    assert photo["adm"] == {
+        "configured": True,
+        "enabled": True,
+        "depth_intensity": 0.8,
+    }
+
+
+def test_adm_generation_passes_requested_depth_resolution(library: Path):
+    mask_generator = FakeAutoMaskGenerator(payload=_png_bytes((255, 255, 255, 255)))
+    depth_generator = FakeAutoDepthGenerator(payload=_png_bytes(mode="L"))
+    with TestClient(
+        create_app(
+            library,
+            auto_mask_generator=mask_generator,
+            auto_depth_generator=depth_generator,
+        )
+    ) as client:
+        response = client.post(
+            "/api/adm/auto",
+            params={"path": "albums/photo.jpg", "max_resolution": 192},
+        )
+        assert response.status_code == 200
+        for _ in range(40):
+            status = client.get("/api/adm/auto", params={"path": "albums/photo.jpg"}).json()
+            if status["status"] == "completed":
+                break
+            time.sleep(0.05)
+        assert depth_generator.max_dimensions == [192]
 
 
 def test_mask_writes_remain_consistent_during_concurrent_requests(client: TestClient, library: Path):

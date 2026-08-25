@@ -236,6 +236,10 @@ fallback. Static paths are independently constrained to the static root.
 - detects immersive AR support;
 - gates Browse Mode, Desktop Preview, and XR entry until the library is ready.
 
+Browse and tagging controllers are loaded on first entry to their respective
+modes. The spatial runtime remains eagerly available so XR/preview launch can
+construct its debug and interaction surface synchronously after activation.
+
 `app/src/services/media-api.js:MediaApi` is the HTTP boundary. It wraps server
 JSON calls, media/thumbnail URLs, mask GET/PUT/DELETE operations, tag-definition
 CRUD, media/commentary tag assignments, commentary captions/volume, commentary
@@ -277,12 +281,27 @@ owns:
 - environment background pass;
 - main `SpatialToolbar`;
 - `InteractionController`;
-- serializable `PanelStore`;
-- `PanelView` and `MediaBrowserView` instances;
-- transient playlists/slideshow state;
-- commentary selection/audio state and the camera-facing `CaptionView`;
-- media and mask request generations;
-- bounded mask cache and active mask editor.
+- feature controllers and the top-level render schedule.
+
+Feature controllers keep independent state machines out of the renderer
+composition root:
+
+- `CommentaryController` owns scoring, audio lifecycle, volume, and the
+  camera-facing `CaptionView`;
+- `ScenePlaybackController` owns scene CRUD, shot selection/capture, playback
+  timing, transitions, and scene-state notifications.
+- `MaskWorkflow` owns erase-mask/depth caches, stale-response generations,
+  editor state, ADM/automatic-mask polling, and panel application.
+- `PanelCoordinator` owns the serializable `PanelStore`, change-aware
+  `PanelView` reconciliation, `MediaBrowserView`, panel playlists/slideshows,
+  media request generations, inline tag saves, gestures, and layout persistence.
+
+The panel store publishes a serializable snapshot plus a compact change
+descriptor. `SpatialApp` caches that subscribed snapshot and reconciles only the
+affected panel views; callers should not poll and clone the store from the
+animation loop. Intent-level operations such as pose changes and media selection
+are atomic so one interaction produces one reconciliation and one persistence
+schedule.
 
 Renderer-independent state remains in `app/src/core/`; Three.js objects remain
 in `app/src/scene/`. Transport media is normalized once by
@@ -299,6 +318,7 @@ flowchart TD
   IC[InteractionController]
   Math[Pure ray + gesture math<br/>core/]
   App[SpatialApp orchestrator]
+  PC[PanelCoordinator]
   Store[PanelStore]
   Toolbar[SpatialToolbar<br/>environment chooser]
   Browser[MediaBrowserView]
@@ -311,20 +331,22 @@ flowchart TD
   Input --> IC
   IC <--> Math
   IC -->|activation / absolute gestures / draw UVs| App
-  App <--> Store
+  App --> PC
+  PC <--> Store
   App --> Toolbar
-  App --> Browser
-  Store -->|snapshots| Panels
-  App --> Panels
+  PC --> Browser
+  PC -->|snapshots| Panels
   Panels --> Media
   App --> Caption
   App <--> API
   FX -->|render first, clear depth| Panels
 ```
 
-The interaction controller raycasts only visible interactive descendants.
-Buttons opt out of gesture targeting, while panel/browser backgrounds expose
-manipulation targets.
+The interaction controller raycasts only meshes registered on the shared
+interaction layer, then rejects hits beneath hidden ancestors. This avoids
+running geometry raycasts against decorative meshes while preserving one scene
+traversal. Buttons opt out of gesture targeting, while panel/browser
+backgrounds expose manipulation targets.
 
 #### One- and two-hand manipulation
 
@@ -364,7 +386,11 @@ state:
 `app/src/scene/panel-view.js:PanelView` adapts this state to Three.js meshes and
 canvas-texture controls. It also owns image double-tap arbitration, video
 play/pause, side navigation, mask overlay/alpha textures, and mask-editor
-controls.
+controls. Stable panel options live in
+`app/src/scene/panel-options-view.js:PanelOptionsView`; it rebuilds dynamic tag
+controls only when their definitions, selection, save mode, or panel layout
+changes. CPU depth-plane construction lives separately in
+`app/src/scene/depth-surface.js`.
 
 `app/src/scene/media-browser-view.js:MediaBrowserView` owns bounded directory
 navigation, pagination, view modes, sorting, thumbnail cards, and selection
@@ -379,10 +405,10 @@ activation-only.
 attached environment chooser. It is movable, while action buttons are
 activation-only.
 
-`app/src/scene/tag-menu.js:TagMenu` is the shared high-resolution, paginated
-spatial multi-select used by both `PanelView` and `MediaBrowserView`. Panel Tags
-edits the server-global assignment for the current media. Browser Filter Tags
-edits the persistent panel-local filter.
+`app/src/scene/tag-menu.js:TagMenu` is the high-resolution, paginated spatial
+multi-select used by `MediaBrowserView` for its persistent panel-local filter.
+The panel options component renders the current media's server-global tag
+assignment inline with mask, depth, and save-mode controls.
 
 ### Media lifecycle
 
@@ -473,13 +499,17 @@ transparency, and distance are device-local `souvenir.settings` values.
 
 ### Environment rendering
 
-`EnvironmentEffects` does not access the passthrough camera. It renders a
-transparent, camera-following background overlay before the main scene:
+`EnvironmentEffects` does not access the passthrough camera. When an effect is
+active, it renders a transparent, camera-following background overlay before the
+main scene:
 
 1. clear to transparent;
 2. render the tint/underwater shader;
 3. clear depth;
 4. render panels and UI.
+
+When the overlay is disabled, the transparent passthrough path clears once and
+renders the main scene directly, avoiding the background draw and depth clear.
 
 Normal, Dark, Night, Underwater, and Red are defined in
 `app/src/core/environment-mode.js`. The current XR stereo eye midpoint positions the
@@ -601,6 +631,12 @@ placement still require manual Quest smoke checks.
 - Extend `InteractionController` with explicit hand-joint pinch recognition;
   current input consumes WebXR target-ray/select events.
 - Move CPU mask opacity generation into a shader if editing larger masks.
+- Profile the bounded, depth-resolution-driven ADM grid before changing its
+  256-segment ceiling; visual quality is part of the current behavior.
+- Expose an XR framebuffer-scale setting only after device profiling establishes
+  useful Quest quality/performance presets.
+- Consider a shared label atlas if panel counts make canvas-texture allocation a
+  measurable cost after the current dependency-gated rebuilds.
 - Store multiple named layouts rather than one library-scoped local slot.
 - Add depth-aware XR effects only when a standardized, permissioned depth API is
   available; passthrough camera pixels remain intentionally inaccessible.

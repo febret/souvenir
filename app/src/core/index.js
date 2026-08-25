@@ -1,7 +1,6 @@
 export * from "./settings.js";
 export * from "./media.js";
 export * from "./media-display.js";
-export * from "./aspect-ratio.js";
 export * from "./playlist.js";
 export * from "./panel-store.js";
 export * from "./store.js";
@@ -14,3 +13,4 @@ export * from "./commentary.js";
 export * from "./commentary-captions.js";
 export * from "./directory-navigation.js";
 export * from "./tags.js";
+export * from "./scene-state.js";

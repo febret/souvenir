@@ -44,6 +44,36 @@ function worldAnchor(pose, anchor) {
 }
 
 describe("XR controller ray snapshots", () => {
+  it("samples hover rays without cloning transient snapshots", () => {
+    const controllers = [new THREE.Group(), new THREE.Group()];
+    const hands = [new THREE.Group(), new THREE.Group()];
+    const interaction = new InteractionController({
+      renderer: {
+        xr: {
+          isPresenting: true,
+          getController: (index) => controllers[index],
+          getHand: (index) => hands[index],
+        },
+      },
+      camera: new THREE.PerspectiveCamera(),
+      scene: new THREE.Scene(),
+      canvas: {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+    const setFromController = vi.spyOn(interaction.raycaster, "setFromXRController");
+    const cloneOrigin = vi.spyOn(interaction.raycaster.ray.origin, "clone");
+    const cloneDirection = vi.spyOn(interaction.raycaster.ray.direction, "clone");
+
+    interaction.update();
+
+    expect(setFromController).toHaveBeenCalledTimes(2);
+    expect(cloneOrigin).not.toHaveBeenCalled();
+    expect(cloneDirection).not.toHaveBeenCalled();
+    interaction.dispose();
+  });
+
   it("releases XR listeners, rays, and scene nodes on disposal", () => {
     const controllers = [new THREE.Group(), new THREE.Group()];
     const hands = [new THREE.Group(), new THREE.Group()];

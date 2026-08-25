@@ -12,6 +12,52 @@ describe("MediaApi errors", () => {
       vi.unstubAllGlobals();
     });
 
+    it("calls scene endpoints with no-store semantics", async () => {
+      const fetch = vi.fn()
+        .mockResolvedValueOnce(new Response(
+          JSON.stringify({ scenes: [] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ))
+        .mockResolvedValueOnce(new Response(
+          JSON.stringify({ id: "scene-1", name: "Trip" }),
+          { status: 201, headers: { "Content-Type": "application/json" } },
+        ))
+        .mockResolvedValueOnce(new Response(
+          JSON.stringify({ id: "scene-1", shots: [] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ))
+        .mockResolvedValueOnce(new Response(
+          JSON.stringify({ id: "scene-1", loop: true }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ));
+      vi.stubGlobal("fetch", fetch);
+      const api = new MediaApi();
+      const payload = {
+        loop: true,
+        default_duration_sec: 8,
+        current_shot_id: null,
+        shots: [],
+      };
+
+      await expect(api.scenes()).resolves.toEqual({ scenes: [] });
+      await expect(api.createScene("Trip")).resolves.toEqual({ id: "scene-1", name: "Trip" });
+      await expect(api.scene("scene-1")).resolves.toEqual({ id: "scene-1", shots: [] });
+      await expect(api.saveScene("scene-1", payload)).resolves.toEqual({ id: "scene-1", loop: true });
+
+      expect(fetch).toHaveBeenNthCalledWith(1, "/api/scenes", expect.objectContaining({ cache: "no-store" }));
+      expect(fetch).toHaveBeenNthCalledWith(2, "/api/scenes", expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        body: JSON.stringify({ name: "Trip" }),
+      }));
+      expect(fetch).toHaveBeenNthCalledWith(3, "/api/scenes/scene-1", expect.objectContaining({ cache: "no-store" }));
+      expect(fetch).toHaveBeenNthCalledWith(4, "/api/scenes/scene-1", expect.objectContaining({
+        method: "PUT",
+        cache: "no-store",
+        body: JSON.stringify(payload),
+      }));
+    });
+
     it("sends the exact bulk assignment payload", async () => {
       const fetch = vi.fn().mockResolvedValue(new Response(
         JSON.stringify({ assignments: [{ path: "a.jpg", tag_ids: ["blue"] }] }),
@@ -28,6 +74,24 @@ describe("MediaApi errors", () => {
         cache: "no-store",
         body: JSON.stringify({ assignments }),
       }));
+    });
+
+    it("passes the configured resolution to ADM generation", async () => {
+      const fetch = vi.fn().mockResolvedValue(new Response(
+        JSON.stringify({ status: "queued" }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ));
+      vi.stubGlobal("fetch", fetch);
+      vi.stubGlobal("window", { location: { origin: "https://souvenir.test" } });
+
+      await new MediaApi().requestAdm("albums/photo.jpg", 192);
+
+      const [url, options] = fetch.mock.calls[0];
+      expect(url).toBeInstanceOf(URL);
+      expect(url.pathname).toBe("/api/adm/auto");
+      expect(url.searchParams.get("path")).toBe("albums/photo.jpg");
+      expect(url.searchParams.get("max_resolution")).toBe("192");
+      expect(options).toEqual(expect.objectContaining({ method: "POST", cache: "no-store" }));
     });
   });
 

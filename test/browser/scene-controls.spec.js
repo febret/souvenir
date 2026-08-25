@@ -26,6 +26,133 @@ test.beforeEach(async ({ page }) => {
   await mockServer(page);
 });
 
+test("creates scenes, excludes minimized panels, transitions shots, and stops on the last shot", async ({
+  page,
+}) => {
+  await page.goto("/?debug=1");
+  await page.locator('.directory-row input[value="albums"]').check();
+  await expect(page.locator("#scenes-section")).toBeVisible();
+  await page.locator("#scene-create-name").fill("Family room");
+  await page.locator("#scene-create-button").click();
+  await expect(page.locator("#scene-select")).toHaveValue("scene-1");
+  await page.locator("#scene-duration").fill("1");
+  await page.locator("#scene-duration").dispatchEvent("change");
+  await expect(page.locator("#scene-duration-value")).toHaveText("1 sec");
+  await page.locator("#preview-button").click();
+  await expect(page.locator("#scene-shell")).toBeVisible();
+  await expect(page.locator("#scene-select")).toHaveValue("scene-1");
+
+  const panelIds = await page.evaluate(() => {
+    const app = window.__souvenirApp;
+    const first = app.store.getState().focusedId;
+    const second = app.store.add({
+      transform: {
+        position: { x: 0.9, y: 1.35, z: -1.45 },
+        rotation: { x: 0, y: 0.2, z: 0 },
+      },
+      dimensions: { width: 0.9, height: 0.6 },
+    });
+    app.store.minimize(second.id);
+    return { first, second: second.id };
+  });
+
+  await page.locator("#scene-capture-delete").click();
+  await expect.poll(() => page.evaluate(() => {
+    const scene = window.__souvenirApp.getSceneState();
+    return {
+      shots: scene.shots.length,
+      capturedPanels: scene.shots[0]?.panels.map((panel) => panel.id),
+      action: document.querySelector("#scene-capture-delete")?.textContent,
+    };
+  })).toEqual({
+    shots: 1,
+    capturedPanels: [panelIds.first],
+    action: "Delete shot",
+  });
+
+  await page.evaluate(({ second }) => {
+    const app = window.__souvenirApp;
+    app.store.restore(second);
+    app.store.setTransform(second, {
+      position: { x: 1.1, y: 1.5, z: -1.7 },
+      rotation: { x: 0, y: 0.4, z: 0 },
+    });
+  }, panelIds);
+  await expect(page.locator("#scene-capture-delete")).toHaveText("Capture shot");
+  await page.locator("#scene-capture-delete").click();
+  await expect.poll(() => page.evaluate(() => {
+    const scene = window.__souvenirApp.getSceneState();
+    return {
+      shots: scene.shots.length,
+      secondShotPanels: scene.shots[1]?.panels.length,
+    };
+  })).toEqual({ shots: 2, secondShotPanels: 2 });
+
+  await page.locator("#scene-loop-mode").selectOption("stop");
+  await page.locator("#scene-shot-select").selectOption("0");
+  await expect.poll(() => page.evaluate(({ second }) => {
+    const view = window.__souvenirApp.panelViews.get(second);
+    return view?.surface.material.opacity ?? null;
+  }, panelIds)).toBeLessThan(1);
+  await expect.poll(() => page.evaluate(({ second }) => {
+    const view = window.__souvenirApp.panelViews.get(second);
+    const interactive = [];
+    view?.traverse((object) => {
+      if (Object.prototype.hasOwnProperty.call(object.userData ?? {}, "interactive")) {
+        interactive.push(object.userData.interactive);
+      }
+    });
+    return interactive.length > 0 && interactive.every((value) => value === false);
+  }, panelIds)).toBe(true);
+  await expect.poll(() => page.evaluate(
+    ({ second }) => window.__souvenirApp.store.getState().panels.some((panel) => panel.id === second),
+    panelIds,
+  ), { timeout: 2500 }).toBe(false);
+
+  await page.locator("#scene-playback-toggle").click();
+  await expect(page.locator("#scene-playback-toggle")).toHaveText("Stop");
+  await expect.poll(() => page.evaluate(() => {
+    const scene = window.__souvenirApp.getSceneState();
+    return {
+      active: scene.playback_active,
+      selected: scene.selected_shot_index,
+    };
+  }), { timeout: 3500 }).toEqual({ active: false, selected: 1 });
+  await expect(page.locator("#scene-playback-toggle")).toHaveText("Play");
+  await expect.poll(() => page.evaluate(
+    ({ second }) => window.__souvenirApp.store.getState().panels.some((panel) => panel.id === second),
+    panelIds,
+  )).toBe(true);
+
+  await page.locator("#scene-loop-mode").selectOption("loop");
+  await page.locator("#scene-shot-select").selectOption("0");
+  await page.locator("#scene-playback-toggle").click();
+  await expect.poll(() => page.evaluate(() => ({
+    active: window.__souvenirApp.getSceneState().playback_active,
+    selected: window.__souvenirApp.getSceneState().selected_shot_index,
+  })), { timeout: 2500 }).toEqual({ active: true, selected: 1 });
+  await expect.poll(() => page.evaluate(() => ({
+    active: window.__souvenirApp.getSceneState().playback_active,
+    selected: window.__souvenirApp.getSceneState().selected_shot_index,
+  })), { timeout: 2500 }).toEqual({ active: true, selected: 0 });
+  await page.locator("#scene-playback-toggle").click();
+  await expect(page.locator("#scene-capture-delete")).toHaveText("Delete shot");
+  await page.locator("#scene-capture-delete").click();
+  await expect.poll(() => page.evaluate(() => window.__souvenirApp.getSceneState().shots.length)).toBe(1);
+
+  await page.locator("#scene-select").selectOption("");
+  await expect.poll(() => page.evaluate(() => window.__souvenirApp.getSceneState().id)).toBeNull();
+  await page.locator("#scene-select").selectOption("scene-1");
+  await expect.poll(() => page.evaluate(() => {
+    const scene = window.__souvenirApp.getSceneState();
+    return {
+      id: scene.id,
+      shots: scene.shots.length,
+      selected: scene.selected_shot_index,
+    };
+  })).toEqual({ id: "scene-1", shots: 1, selected: 0 });
+});
+
 test("moves the media browser from its grab surface without breaking entry selection", async ({
   page,
 }) => {
@@ -80,13 +207,13 @@ test("moves the media browser from its grab surface without breaking entry selec
     interactive: true,
     kind: "browser-surface",
   });
-  for (const [name, dimensions, minimum] of [
-    ["backdrop", browserDetails.backdrop, { width: 2400, height: 1600 }],
-    ["entry", browserDetails.entry, { width: 1280, height: 320 }],
-    ["control", browserDetails.control, { width: 1024, height: 256 }],
+  for (const [name, dimensions, minimum, expectsCanvas] of [
+    ["backdrop", browserDetails.backdrop, { width: 2400, height: 1600 }, true],
+    ["entry", browserDetails.entry, { width: 1280, height: 320 }, true],
+    ["control", browserDetails.control, { width: 1024, height: 256 }, true],
   ]) {
-    expect(dimensions, `Expected a canvas-backed ${name} texture`).toMatchObject({
-      isCanvas: true,
+    expect(dimensions, `Expected a texture for ${name}`).toMatchObject({
+      isCanvas: expectsCanvas,
     });
     expect(dimensions.width, `${name} texture width`).toBeGreaterThanOrEqual(
       minimum.width,
@@ -140,6 +267,189 @@ test("moves the media browser from its grab surface without breaking entry selec
   ).toBe("albums/beach.jpg");
 });
 
+test("prompts and enables ADM with generated depth data", async ({ page }) => {
+  await page.goto("/?debug=1");
+  await page.locator('.directory-row input[value="albums"]').check();
+  await page.locator("#adm-default-depth-intensity").fill("0.8");
+  await page.locator("#adm-max-resolution").fill("128");
+  await expect(page.locator("#adm-default-depth-intensity-value")).toHaveText("0.80×");
+  await expect(page.locator("#adm-max-resolution-value")).toHaveText("128 px");
+  await expect
+    .poll(() => page.evaluate(() => {
+      const settings = JSON.parse(localStorage.getItem("souvenir.settings") ?? "{}");
+      return {
+        intensity: settings.admDefaultDepthIntensity,
+        resolution: settings.admMaxResolution,
+      };
+    }))
+    .toEqual({ intensity: 0.8, resolution: 128 });
+  await page.locator("#preview-button").click();
+  await expect(page.locator("#scene-shell")).toBeVisible();
+
+  const panelId = await page.evaluate(() => window.__souvenirApp.store.getState().focusedId);
+  await selectBeachImage(page, panelId);
+  await expect
+    .poll(() => page.evaluate((id) => {
+      const app = window.__souvenirApp;
+      return {
+        mediaType: app.panelViews.get(id)?.mediaType ?? null,
+        intensity: app.store.getState().panels.find((panel) => panel.id === id)
+          ?.depthIntensity ?? null,
+      };
+    }, panelId))
+    .toEqual({ mediaType: "image", intensity: 0.8 });
+  await clickSceneObject(page, { action: "toggle-options", panelId });
+  await expect
+    .poll(() => page.evaluate((id) =>
+      Boolean(window.__souvenirApp.panelViews.get(id)?.optionsPanel.visible),
+    panelId))
+    .toBe(true);
+  await clickSceneObject(page, { action: "toggle-3d-mode", panelId });
+  await expect
+    .poll(() => page.evaluate((id) => {
+      const app = window.__souvenirApp;
+      const view = app.panelViews.get(id);
+      return {
+        visible: Boolean(view?.admPromptVisible),
+        enabled: app.store.getState().panels.find((panel) => panel.id === id)?.admEnabled,
+        error: document.querySelector("#app-error")?.textContent ?? "",
+      };
+    }, panelId))
+    .toEqual({ visible: true, enabled: false, error: "" });
+  await clickSceneObject(page, { action: "adm-generate-confirm", panelId });
+  await expect
+    .poll(() => page.evaluate((id) => {
+      const app = window.__souvenirApp;
+      const panel = app.store.getState().panels.find((item) => item.id === id);
+      const view = app.panelViews.get(id);
+      return {
+        enabled: panel?.admEnabled ?? false,
+        hasDepth: Boolean(view?.depthMapCanvas),
+        status: app.autoAdmStates.get("albums/beach.jpg")?.status ?? "missing",
+        cached: app.depthCache.has("albums/beach.jpg"),
+        meshDisplaced: view?.surface.geometry !== view?.surfaceFlatGeometry,
+        meshResolution: Math.max(
+          view?.surface.geometry.parameters.widthSegments ?? 0,
+          view?.surface.geometry.parameters.heightSegments ?? 0,
+        ),
+        intensity: panel?.depthIntensity ?? null,
+        minimumMeshDepth: Math.min(
+          ...Array.from(view?.surface.geometry.attributes.position.array ?? [])
+            .filter((_, index) => index % 3 === 2),
+        ),
+        depthSliderInteractive: Boolean(view?.depthSlider.track.userData.interactive),
+        error: document.querySelector("#app-error")?.textContent ?? "",
+      };
+    }, panelId))
+    .toEqual({
+      enabled: true,
+      hasDepth: true,
+      status: "completed",
+      cached: true,
+      meshDisplaced: true,
+      meshResolution: 128,
+      intensity: 0.8,
+      minimumMeshDepth: expect.any(Number),
+      depthSliderInteractive: true,
+      error: "",
+    });
+  const minimumMeshDepth = await page.evaluate((id) => {
+    const positions = window.__souvenirApp.panelViews.get(id)
+      ?.surface.geometry.attributes.position.array ?? [];
+    return Math.min(...Array.from(positions).filter((_, index) => index % 3 === 2));
+  }, panelId);
+  expect(minimumMeshDepth).toBeGreaterThan(0);
+  const uiDepths = await page.evaluate((id) => {
+    const view = window.__souvenirApp.panelViews.get(id);
+    const positions = Array.from(view?.surface.geometry.attributes.position.array ?? []);
+    const surfaceDepths = positions.filter((_, index) => index % 3 === 2);
+    const maximumSurfaceDepth = Math.max(...surfaceDepths);
+    const controlDepth = Math.max(
+      ...view.controls.children.map((control) => view.controls.position.z + (control.position?.z ?? 0)),
+    );
+    const optionsBackdrop = view.optionsPanel.children[0];
+    const optionsDepth = view.optionsPanel.position.z + (optionsBackdrop?.position?.z ?? 0);
+    return { maximumSurfaceDepth, controlDepth, optionsDepth };
+  }, panelId);
+  expect(uiDepths.controlDepth).toBeGreaterThan(uiDepths.maximumSurfaceDepth);
+  expect(uiDepths.optionsDepth).toBeGreaterThan(uiDepths.maximumSurfaceDepth);
+
+  const secondPanelId = await page.evaluate(() => {
+    const app = window.__souvenirApp;
+    return app.store.add({
+      transform: { position: { x: 0.5, y: 1.35, z: -1.45 } },
+    }).id;
+  });
+  await selectBeachImage(page, secondPanelId);
+  await expect
+    .poll(() => page.evaluate((id) => {
+      const app = window.__souvenirApp;
+      const panel = app.store.getState().panels.find((item) => item.id === id);
+      const view = app.panelViews.get(id);
+      return {
+        enabled: panel?.admEnabled ?? false,
+        intensity: panel?.depthIntensity ?? null,
+        hasDepth: Boolean(view?.depthMapCanvas),
+        meshDisplaced: view?.surface.geometry !== view?.surfaceFlatGeometry,
+      };
+    }, secondPanelId))
+    .toEqual({
+      enabled: true,
+      intensity: 0.8,
+      hasDepth: true,
+      meshDisplaced: true,
+    });
+});
+
+test("keeps panel UI and options in front of displaced 3D depth", async ({ page }) => {
+  await page.goto("/?debug=1");
+  await page.locator('.directory-row input[value="albums"]').check();
+  await page.locator("#preview-button").click();
+  await expect(page.locator("#scene-shell")).toBeVisible();
+
+  const panelId = await page.evaluate(() => window.__souvenirApp.store.getState().focusedId);
+  await selectBeachImage(page, panelId);
+  await clickSceneObject(page, { action: "toggle-options", panelId });
+  await clickSceneObject(page, { action: "toggle-3d-mode", panelId });
+  const admState = await page.evaluate((id) => {
+    const app = window.__souvenirApp;
+    const panel = app.store.getState().panels.find((entry) => entry.id === id);
+    const view = app.panelViews.get(id);
+    return {
+      enabled: Boolean(panel?.admEnabled),
+      promptVisible: Boolean(view?.admPromptVisible),
+    };
+  }, panelId);
+  if (admState.promptVisible && !admState.enabled) {
+    await clickSceneObject(page, { action: "adm-generate-confirm", panelId });
+  }
+  await expect.poll(() => page.evaluate((id) => {
+    const app = window.__souvenirApp;
+    const panel = app.store.getState().panels.find((entry) => entry.id === id);
+    const view = app.panelViews.get(id);
+    return {
+      enabled: Boolean(panel?.admEnabled),
+      meshDisplaced: view?.surface.geometry !== view?.surfaceFlatGeometry,
+    };
+  }, panelId)).toEqual({ enabled: true, meshDisplaced: true });
+
+  const uiDepths = await page.evaluate((id) => {
+    const view = window.__souvenirApp.panelViews.get(id);
+    const depthValues = Array.from(view?.surface.geometry.attributes.position.array ?? [])
+      .filter((_, index) => index % 3 === 2);
+    const maximumSurfaceDepth = Math.max(...depthValues);
+    const controlDepth = Math.max(
+      ...view.controls.children.map((control) => view.controls.position.z + (control.position?.z ?? 0)),
+    );
+    const optionsBackdrop = view.optionsPanel.children[0];
+    const optionsDepth = view.optionsPanel.position.z + (optionsBackdrop?.position?.z ?? 0);
+    return { maximumSurfaceDepth, controlDepth, optionsDepth };
+  }, panelId);
+
+  expect(uiDepths.controlDepth).toBeGreaterThan(uiDepths.maximumSurfaceDepth);
+  expect(uiDepths.optionsDepth).toBeGreaterThan(uiDepths.maximumSurfaceDepth);
+});
+
 test("applies absolute two-hand panel and browser gestures without moving controls", async ({
   page,
 }) => {
@@ -152,8 +462,16 @@ test("applies absolute two-hand panel and browser gestures without moving contro
   await expect(page.locator("#scene-shell")).toBeVisible();
 
   const panelId = await page.evaluate(() => window.__souvenirApp.store.getState().focusedId);
+  await selectBeachImage(page, panelId);
+  await expect.poll(() => page.evaluate((id) =>
+    window.__souvenirApp.panelViews.get(id)?.mediaLoaded, panelId)).toBe(true);
   const result = await page.evaluate((id) => {
     const app = window.__souvenirApp;
+    const view = app.panelViews.get(id);
+    const initialSurfaceScale = {
+      x: view.surface.scale.x,
+      y: view.surface.scale.y,
+    };
     app.applyGesture(id, {
       hands: 2,
       gestureId: "panel-two-hand",
@@ -174,7 +492,6 @@ test("applies absolute two-hand panel and browser gestures without moving contro
       absoluteDimensions: { width: 1.8, height: 1.2 },
     });
     const panel = app.store.getState().panels.find((item) => item.id === id);
-    const view = app.panelViews.get(id);
     app.store.setLocked(id, true);
     const lockedPosition = { ...panel.transform.position };
     app.applyGesture(id, {
@@ -205,6 +522,11 @@ test("applies absolute two-hand panel and browser gestures without moving contro
       locked,
       lockedPosition,
       minimized,
+      initialSurfaceScale,
+      scaledSurfaceScale: {
+        x: view.surface.scale.x,
+        y: view.surface.scale.y,
+      },
     };
   }, panelId);
 
@@ -213,6 +535,8 @@ test("applies absolute two-hand panel and browser gestures without moving contro
     rotation: { x: 0.1, y: -0.2, z: 0.05 },
   });
   expect(result.panel.dimensions).toEqual({ width: 1.8, height: 1.2 });
+  expect(result.scaledSurfaceScale.x / result.initialSurfaceScale.x).toBeCloseTo(1.5);
+  expect(result.scaledSurfaceScale.y / result.initialSurfaceScale.y).toBeCloseTo(1.5);
   expect(result.pairStartDimensions).toEqual(result.panel.dimensions);
   expect(result.manipulation.dimensions).toEqual({ width: 1.8, height: 1.2 });
   expect(result.manipulation.scaleLimits.min).toBeGreaterThan(0);
@@ -412,10 +736,10 @@ test("chooses persistent background-only environment effects from the toolbar", 
 
   const modes = [
     { mode: "normal", color: 0x000000, opacity: 0, underwater: 0, visible: false },
-    { mode: "dark", color: 0x000000, opacity: 0.42, underwater: 0, visible: true },
-    { mode: "night", color: 0x07162f, opacity: 0.45, underwater: 0, visible: true },
-    { mode: "underwater", color: 0x087eaa, opacity: 0.38, underwater: 1, visible: true },
-    { mode: "red", color: 0x75070c, opacity: 0.4, underwater: 0, visible: true },
+    { mode: "dark", color: 0x000000, opacity: 0.6, underwater: 0, visible: true },
+    { mode: "night", color: 0x07162f, opacity: 0.9, underwater: 0, visible: true },
+    { mode: "underwater", color: 0x087eaa, opacity: 0.8, underwater: 1, visible: true },
+    { mode: "red", color: 0x75070c, opacity: 0.8, underwater: 0, visible: true },
   ];
   const effects = new Map();
   for (const expected of modes) {
@@ -506,7 +830,7 @@ test("chooses persistent background-only environment effects from the toolbar", 
     () => window.__souvenirApp.environmentEffects.renderPasses,
   );
   expect(renderPasses.background).toBeGreaterThan(0);
-  expect(renderPasses.main).toBe(renderPasses.background);
+  expect(renderPasses.main).toBeGreaterThan(renderPasses.background);
   expect(renderPasses.depthClears).toBe(renderPasses.background);
 
   await clickSceneObject(page, { action: "toggle-environment-menu" });

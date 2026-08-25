@@ -73,6 +73,36 @@ export class MediaApi {
     return readJson(await fetch(`${this.baseUrl}/api/tags`, noStore()));
   }
 
+  async scenes() {
+    return readJson(await fetch(`${this.baseUrl}/api/scenes`, noStore()));
+  }
+
+  async createScene(name) {
+    return readJson(await fetch(`${this.baseUrl}/api/scenes`, noStore({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    })));
+  }
+
+  async scene(sceneId) {
+    return readJson(await fetch(
+      `${this.baseUrl}/api/scenes/${encodeURIComponent(String(sceneId))}`,
+      noStore(),
+    ));
+  }
+
+  async saveScene(sceneId, scene) {
+    return readJson(await fetch(
+      `${this.baseUrl}/api/scenes/${encodeURIComponent(String(sceneId))}`,
+      noStore({
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(scene),
+      }),
+    ));
+  }
+
   async commentary() {
     return readJson(await fetch(`${this.baseUrl}/api/commentary`, noStore()));
   }
@@ -179,6 +209,22 @@ export class MediaApi {
     })));
   }
 
+  async mediaAdm(path) {
+    const url = new URL(`${this.baseUrl}/api/media-adm`, window.location.origin);
+    url.searchParams.set("path", path ?? "");
+    return readJson(await fetch(url, noStore()));
+  }
+
+  async saveMediaAdm(path, enabled, depthIntensity) {
+    const url = new URL(`${this.baseUrl}/api/media-adm`, window.location.origin);
+    url.searchParams.set("path", path ?? "");
+    return readJson(await fetch(url, noStore({
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: Boolean(enabled), depth_intensity: Number(depthIntensity) }),
+    })));
+  }
+
   thumbnailUrl(path) {
     const url = addPath(
       new URL(`${this.baseUrl}/api/thumbnail`, window.location.origin),
@@ -231,6 +277,77 @@ export class MediaApi {
 
   async deleteMask(path) {
     const url = maskUrl(this.baseUrl, "/api/mask", path);
+    return readJson(await fetch(url, noStore({ method: "DELETE" })));
+  }
+
+  async requestAutoMask(path) {
+    const url = maskUrl(this.baseUrl, "/api/mask/auto", path);
+    return readJson(await fetch(url, noStore({ method: "POST" })));
+  }
+
+  async autoMaskStatus(path) {
+    const url = maskUrl(this.baseUrl, "/api/mask/auto", path);
+    return readJson(await fetch(url, noStore()));
+  }
+
+  async cancelAutoMask(path) {
+    const url = maskUrl(this.baseUrl, "/api/mask/auto", path);
+    return readJson(await fetch(url, noStore({ method: "DELETE" })));
+  }
+
+  async depthInfo(path) {
+    const url = maskUrl(this.baseUrl, "/api/depth-info", path);
+    return readJson(await fetch(url, noStore()));
+  }
+
+  async loadDepth(path) {
+    const url = maskUrl(this.baseUrl, "/api/depth", path);
+    const response = await fetch(url, noStore());
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const body = await response.json();
+        detail = body.detail ?? body.message ?? "";
+      } catch {
+        detail = await response.text();
+      }
+      throw new MediaApiError(
+        detail || `The media server returned ${response.status}.`,
+        response.status,
+      );
+    }
+    return response.blob();
+  }
+
+  async requestAutoDepth(path, maxResolution = 512) {
+    const url = maskUrl(this.baseUrl, "/api/depth/auto", path);
+    url.searchParams.set("max_resolution", String(maxResolution));
+    return readJson(await fetch(url, noStore({ method: "POST" })));
+  }
+
+  async autoDepthStatus(path) {
+    const url = maskUrl(this.baseUrl, "/api/depth/auto", path);
+    return readJson(await fetch(url, noStore()));
+  }
+
+  async cancelAutoDepth(path) {
+    const url = maskUrl(this.baseUrl, "/api/depth/auto", path);
+    return readJson(await fetch(url, noStore({ method: "DELETE" })));
+  }
+
+  async requestAdm(path, maxResolution = 512) {
+    const url = maskUrl(this.baseUrl, "/api/adm/auto", path);
+    url.searchParams.set("max_resolution", String(maxResolution));
+    return readJson(await fetch(url, noStore({ method: "POST" })));
+  }
+
+  async admStatus(path) {
+    const url = maskUrl(this.baseUrl, "/api/adm/auto", path);
+    return readJson(await fetch(url, noStore()));
+  }
+
+  async cancelAdm(path) {
+    const url = maskUrl(this.baseUrl, "/api/adm/auto", path);
     return readJson(await fetch(url, noStore({ method: "DELETE" })));
   }
 }

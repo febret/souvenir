@@ -1,4 +1,4 @@
-export const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 4;
 export const SETTINGS_STORAGE_KEY = "souvenir.settings";
 export const TAG_SORT_ORDERS = Object.freeze({
   ALPHA_ASC: "alpha-asc",
@@ -14,6 +14,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   captionSize: 1,
   captionTransparency: 0.1,
   captionDistance: 1.2,
+  admDefaultDepthIntensity: 0.35,
+  admMaxResolution: 512,
 });
 
 const MIN_SLIDESHOW_INTERVAL_MS = 1000;
@@ -22,6 +24,10 @@ const CAPTION_RANGES = Object.freeze({
   captionSize: [0.5, 2],
   captionTransparency: [0, 0.8],
   captionDistance: [0.5, 3],
+});
+const ADM_RANGES = Object.freeze({
+  admDefaultDepthIntensity: [0, 3],
+  admMaxResolution: [64, 512],
 });
 
 function cloneDefaults() {
@@ -66,6 +72,15 @@ export function validateSettings(value) {
       errors.push(`${key} must be between ${minimum} and ${maximum}.`);
     }
   }
+  for (const [key, [minimum, maximum]] of Object.entries(ADM_RANGES)) {
+    if (value[key] !== undefined
+      && (!Number.isFinite(value[key]) || value[key] < minimum || value[key] > maximum)) {
+      errors.push(`${key} must be between ${minimum} and ${maximum}.`);
+    }
+  }
+  if (value.admMaxResolution !== undefined && !Number.isInteger(value.admMaxResolution)) {
+    errors.push("admMaxResolution must be an integer.");
+  }
 
   return { valid: errors.length === 0, errors, value: reconcileSettings(value) };
 }
@@ -86,6 +101,11 @@ export function reconcileSettings(value, availableDirectories) {
       ? Math.min(maximum, Math.max(minimum, source[key]))
       : DEFAULT_SETTINGS[key];
   };
+  const admSetting = (key) => {
+    const [minimum, maximum] = ADM_RANGES[key];
+    const value = Number.isFinite(source[key]) ? source[key] : DEFAULT_SETTINGS[key];
+    return Math.min(maximum, Math.max(minimum, value));
+  };
 
   return {
     version: SETTINGS_VERSION,
@@ -98,6 +118,8 @@ export function reconcileSettings(value, availableDirectories) {
     captionSize: captionSetting("captionSize"),
     captionTransparency: captionSetting("captionTransparency"),
     captionDistance: captionSetting("captionDistance"),
+    admDefaultDepthIntensity: Math.round(admSetting("admDefaultDepthIntensity") * 100) / 100,
+    admMaxResolution: Math.round(admSetting("admMaxResolution")),
   };
 }
 

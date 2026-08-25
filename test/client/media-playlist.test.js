@@ -5,7 +5,7 @@ import {
   normalizeMediaEntry,
   sortMedia,
 } from "../../app/src/core/media.js";
-import { hitZoneForPoint, nextMedia, previousMedia } from "../../app/src/core/playlist.js";
+import { nextMedia, previousMedia } from "../../app/src/core/playlist.js";
 
 const media = [
   { id: "z", name: "zebra.jpg", mtimeMs: 10, size: 1 },
@@ -47,12 +47,9 @@ describe("media sorting and playlist navigation", () => {
     expect(normalizeMediaEntry(normalized).mtime).toBe(normalized.mtime);
   });
 
-  it("wraps previous and next navigation and identifies side hit zones", () => {
+  it("wraps previous and next navigation", () => {
     expect(nextMedia(media, "b").id).toBe("z");
     expect(nextMedia(media, "z").id).toBe("a");
     expect(previousMedia(media, "a").id).toBe("z");
-    expect(hitZoneForPoint(25, 100)).toBe("previous");
-    expect(hitZoneForPoint(50, 100)).toBeNull();
-    expect(hitZoneForPoint(75, 100)).toBe("next");
   });
 });

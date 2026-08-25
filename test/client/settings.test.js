@@ -34,6 +34,8 @@ describe("settings", () => {
       captionSize: DEFAULT_SETTINGS.captionSize,
       captionTransparency: DEFAULT_SETTINGS.captionTransparency,
       captionDistance: DEFAULT_SETTINGS.captionDistance,
+      admDefaultDepthIntensity: DEFAULT_SETTINGS.admDefaultDepthIntensity,
+      admMaxResolution: DEFAULT_SETTINGS.admMaxResolution,
     });
   });
 
@@ -42,9 +44,11 @@ describe("settings", () => {
       autoplayVideos: "yes",
       slideshowIntervalMs: Infinity,
       captionDistance: 10,
+      admDefaultDepthIntensity: -1,
+      admMaxResolution: 700,
     });
     expect(result.valid).toBe(false);
-    expect(result.errors).toHaveLength(3);
+    expect(result.errors).toHaveLength(5);
     expect(result.value.autoplayVideos).toBe(DEFAULT_SETTINGS.autoplayVideos);
   });
 

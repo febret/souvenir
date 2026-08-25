@@ -26,7 +26,7 @@ test.beforeEach(async ({ page }) => {
   await mockServer(page);
 });
 
-test("cycles image display modes only for nearby rapid double taps", async ({ page }) => {
+test("advances media only for nearby rapid double taps", async ({ page }) => {
   await page.goto("/?debug=1");
   await page.locator('.directory-row input[value="albums"]').check();
   await page.locator("#preview-button").click();
@@ -55,32 +55,20 @@ test("cycles image display modes only for nearby rapid double taps", async ({ pa
       offset: texture.offset.toArray(),
     };
   }, panelId);
-  const fitSurface = await surfaceState();
+  const initialSurface = await surfaceState();
 
   await doubleTapSceneObject(page, { kind: "panel-surface", panelId });
-  await expect.poll(() =>
-    page.evaluate(() => window.__souvenirApp.store.getState().panels[0].displayMode),
-  ).toBe("actual");
-  const actualSurface = await surfaceState();
-  expect(actualSurface).not.toEqual(fitSurface);
-
-  await doubleTapSceneObject(page, { kind: "panel-surface", panelId });
-  await expect.poll(() =>
-    page.evaluate(() => window.__souvenirApp.store.getState().panels[0].displayMode),
-  ).toBe("fill");
-  const fillSurface = await surfaceState();
-  expect(fillSurface).not.toEqual(actualSurface);
-
-  await doubleTapSceneObject(page, { kind: "panel-surface", panelId });
-  await expect.poll(() =>
-    page.evaluate(() => window.__souvenirApp.store.getState().panels[0].displayMode),
-  ).toBe("fit");
-
-  await page.waitForTimeout(450);
-  await clickSceneObject(page, { kind: "panel-surface", panelId }, { x: 0.4, y: 0, z: 0 });
   await expect.poll(() =>
     page.evaluate(() => window.__souvenirApp.store.getState().panels[0].media.selectedId),
   ).toBe("albums/forest.jpg");
+  const nextSurface = await surfaceState();
+  expect(nextSurface).not.toEqual(initialSurface);
+
+  await page.waitForTimeout(450);
+  await clickSceneObject(page, { kind: "panel-surface", panelId }, { x: -0.4, y: 0, z: 0 });
+  await expect.poll(() =>
+    page.evaluate(() => window.__souvenirApp.store.getState().panels[0].media.selectedId),
+  ).toBe("albums/beach.jpg");
 
   await page.waitForTimeout(450);
   await clickSceneObject(page, { kind: "panel-surface", panelId }, { x: -0.4, y: 0, z: 0 });
@@ -88,10 +76,7 @@ test("cycles image display modes only for nearby rapid double taps", async ({ pa
   await clickSceneObject(page, { kind: "panel-surface", panelId }, { x: 0.4, y: 0, z: 0 });
   await expect.poll(() =>
     page.evaluate(() => window.__souvenirApp.store.getState().panels[0].media.selectedId),
-  ).toBe("albums/forest.jpg");
-  expect(await page.evaluate(
-    () => window.__souvenirApp.store.getState().panels[0].displayMode,
-  )).toBe("fit");
+  ).toBe("albums/beach.jpg");
 
   await page.waitForTimeout(450);
   await page.evaluate((id) => {
@@ -108,100 +93,6 @@ test("cycles image display modes only for nearby rapid double taps", async ({ pa
   }, panelId);
   await clickSceneObject(page, { kind: "panel-surface", panelId });
   expect(await page.evaluate(() => window.__videoTapCalls)).toBe(1);
-});
-
-test("cycles persistent panel aspect ratios using loaded native image dimensions", async ({
-  page,
-}) => {
-  await page.goto("/?debug=1");
-  await page.locator('.directory-row input[value="albums"]').check();
-  await page.locator("#preview-button").click();
-  await expect(page.locator("#scene-shell")).toBeVisible();
-
-  const panelId = await page.evaluate(
-    () => window.__souvenirApp.store.getState().focusedId,
-  );
-  await clickSceneObject(page, { action: "browse", panelId });
-  await clickSceneObject(page, {
-    kind: "browser-entry",
-    entryPath: "albums/beach.jpg",
-  });
-  await expect.poll(() =>
-    page.evaluate(() => window.__souvenirApp.store.getState().panels[0].media.selectedId),
-  ).toBe("albums/beach.jpg");
-
-  const panelState = () => page.evaluate(() => window.__souvenirApp.store.getState().panels[0]);
-  const expectRatio = async (mode, height) => {
-    await expect.poll(async () => (await panelState()).aspectRatioMode).toBe(mode);
-    await expect.poll(async () => (await panelState()).dimensions.width).toBe(1.2);
-    await expect.poll(async () => (await panelState()).dimensions.height).toBeCloseTo(height, 8);
-  };
-
-  await expectRatio("native", 0.675);
-  await expect(page.locator("canvas")).toBeVisible();
-  await expect.poll(() => page.evaluate((id) => {
-    const view = window.__souvenirApp.panelViews.get(id);
-    return view.controls.children.some(
-      (control) =>
-        control.userData.action === "cycle-aspect-ratio" &&
-        control.userData.label === "Ratio",
-    );
-  }, panelId)).toBe(true);
-
-  for (const [mode, height] of [
-    ["1:1", 1.2],
-    ["4:3", 0.9],
-    ["3:2", 0.8],
-    ["16:9", 0.675],
-  ]) {
-    await clickSceneObject(page, { action: "cycle-aspect-ratio", panelId });
-    await expectRatio(mode, height);
-    await expect.poll(() =>
-      page.evaluate((id) => window.__souvenirApp.panelViews.get(id).modeIndicator.visible, panelId),
-    ).toBe(true);
-  }
-
-  await doubleTapSceneObject(page, { kind: "panel-surface", panelId });
-  await expect.poll(() =>
-    page.evaluate(() => window.__souvenirApp.store.getState().panels[0].displayMode),
-  ).toBe("actual");
-  await expectRatio("16:9", 0.675);
-
-  await clickSceneObject(page, { action: "cycle-aspect-ratio", panelId });
-  await expectRatio("9:16", 2.1333333333333333);
-  await clickSceneObject(page, { action: "cycle-aspect-ratio", panelId });
-  await expectRatio("native", 0.675);
-
-  await page.locator("#exit-preview").click();
-  await page.reload();
-  await page.locator("#preview-button").click();
-  await expect.poll(() =>
-    page.evaluate(() => window.__souvenirApp.store.getState().panels[0].aspectRatioMode),
-  ).toBe("native");
-  await expect.poll(() =>
-    page.evaluate(() => window.__souvenirApp.store.getState().panels[0].dimensions.width),
-  ).toBe(1.2);
-  await expect.poll(() =>
-    page.evaluate(() => window.__souvenirApp.store.getState().panels[0].dimensions.height),
-  ).toBeCloseTo(0.675, 8);
-
-  const restoredPanelId = await page.evaluate(
-    () => window.__souvenirApp.store.getState().focusedId,
-  );
-  await clickSceneObject(page, { action: "browse", panelId: restoredPanelId });
-  await clickSceneObject(page, {
-    kind: "browser-entry",
-    entryPath: "albums/forest.jpg",
-  });
-  await expect.poll(() =>
-    page.evaluate(() => window.__souvenirApp.store.getState().panels[0].media.selectedId),
-  ).toBe("albums/forest.jpg");
-  await expect.poll(() =>
-    page.evaluate(() => window.__souvenirApp.store.getState().panels[0].dimensions.width),
-  ).toBe(1.2);
-  await expect.poll(() =>
-    page.evaluate(() => window.__souvenirApp.store.getState().panels[0].dimensions.height),
-  ).toBeCloseTo(1.6, 8);
 });
 
 test("keeps the newest native image texture after an earlier image load resolves", async ({
@@ -245,14 +136,12 @@ test("keeps the newest native image texture after an earlier image load resolves
       },
       mediaSize: view.mediaSize,
       dimensions: app.store.getState().panels[0].dimensions,
-      aspectRatioMode: app.store.getState().panels[0].aspectRatioMode,
     };
   }, panelId);
   await expect.poll(readFinalMedia).toMatchObject({
     texture: { width: 1200, height: 1600 },
     mediaSize: { width: 1200, height: 1600 },
     dimensions: { width: 1.2 },
-    aspectRatioMode: "native",
   });
   const finalMedia = await readFinalMedia();
   expect(finalMedia.dimensions.height).toBeCloseTo(1.6, 8);
@@ -287,7 +176,6 @@ test("edits a shared erase mask without allowing panel gestures or media navigat
   ]));
 
   const beforeDraw = await page.evaluate((id) => ({
-    displayMode: window.__souvenirApp.store.getState().panels.find((panel) => panel.id === id).displayMode,
     selectedId: window.__souvenirApp.store.getState().panels.find((panel) => panel.id === id).media.selectedId,
   }), panelId);
   await clickSceneObject(page, { action: "edit-erase-mask", panelId });
@@ -342,7 +230,6 @@ test("edits a shared erase mask without allowing panel gestures or media navigat
   })).toBe(true);
   await page.waitForTimeout(400);
   expect(await page.evaluate((id) => ({
-    displayMode: window.__souvenirApp.store.getState().panels.find((panel) => panel.id === id).displayMode,
     selectedId: window.__souvenirApp.store.getState().panels.find((panel) => panel.id === id).media.selectedId,
   }), panelId)).toEqual(beforeDraw);
 
@@ -459,6 +346,125 @@ test("cancels an active editor when the real panel store advances to another ima
     mediaType: "image",
   });
   expect(maskServer.requests).toEqual([]);
+});
+
+test("locks editor interactions while auto mask is generating and supports cancel/restart", async ({
+  page,
+}) => {
+  const maskServer = { masks: new Map(), requests: [] };
+  const autoMaskServer = { jobs: new Map(), requests: [], autoComplete: false, device: "cuda" };
+  const activateAction = (panelId, action) => page.evaluate(({ id, selectedAction }) => {
+    const app = window.__souvenirApp;
+    let target = null;
+    app.scene.traverse((object) => {
+      if (
+        !target
+        && object.userData.action === selectedAction
+        && object.userData.panelId === id
+      ) {
+        target = object;
+      }
+    });
+    if (!target) throw new Error(`Scene action was not found: ${selectedAction}`);
+    app.interactions.onActivate({ object: target, uv: null });
+  }, { id: panelId, selectedAction: action });
+  await page.unroute("**/api/**");
+  await mockServer(page, { maskServer, autoMaskServer });
+  await page.goto("/?debug=1");
+  await page.locator('.directory-row input[value="albums"]').check();
+  await page.locator("#preview-button").click();
+  await expect(page.locator("#scene-shell")).toBeVisible();
+
+  const panelId = await page.evaluate(() => window.__souvenirApp.store.getState().focusedId);
+  await selectBeachImage(page, panelId);
+  await page.evaluate((id) => {
+    window.__souvenirApp.store.setMaskEnabled(id, false);
+  }, panelId);
+  await expect.poll(() => page.evaluate((id) =>
+    window.__souvenirApp.panelViews.get(id)?.mediaType,
+  panelId)).toBe("image");
+  await clickSceneObject(page, { action: "toggle-options", panelId });
+  await expect.poll(() => page.evaluate((id) =>
+    window.__souvenirApp.panelViews.get(id)?.optionsPanel.visible,
+  panelId)).toBe(true);
+  await activateAction(panelId, "edit-erase-mask");
+  await expect.poll(() => page.evaluate(() =>
+    Boolean(window.__souvenirApp.maskEditor),
+  )).toBe(true);
+  await activateAction(panelId, "mask-auto");
+  await expect.poll(() => autoMaskServer.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+  await expect.poll(() => page.evaluate((id) => {
+    const app = window.__souvenirApp;
+    const view = app.panelViews.get(id);
+    const autoButton = view?.editorControls.children.find((control) => control.userData.action === "mask-auto");
+    const clearButton = view?.editorControls.children.find((control) => control.userData.action === "mask-clear");
+    return {
+      busy: app.maskEditor?.autoMaskBusy,
+      brushInteractive: view?.brushSlider.track.userData.interactive,
+      clearInteractive: clearButton?.userData.interactive,
+      glowVisible: view?.maskRegenerationGlow.visible,
+      overlayColor: view?.maskOverlay.material.color.getHex(),
+      autoButtonColor: autoButton?.material.color.getHex(),
+    };
+  }, panelId)).toMatchObject({
+    busy: true,
+    brushInteractive: false,
+    clearInteractive: false,
+    glowVisible: true,
+    overlayColor: 0xb0b9be,
+  });
+
+  await activateAction(panelId, "mask-auto");
+  await expect.poll(() => autoMaskServer.requests.filter((request) => request.method === "DELETE")).toHaveLength(1);
+  await expect.poll(() => page.evaluate((id) => {
+    const app = window.__souvenirApp;
+    const view = app.panelViews.get(id);
+    const clearButton = view?.editorControls.children.find((control) => control.userData.action === "mask-clear");
+    return {
+      busy: app.maskEditor?.autoMaskBusy,
+      brushInteractive: view?.brushSlider.track.userData.interactive,
+      clearInteractive: clearButton?.userData.interactive,
+      glowVisible: view?.maskRegenerationGlow.visible,
+      overlayColor: view?.maskOverlay.material.color.getHex(),
+    };
+  }, panelId)).toEqual({
+    busy: false,
+    brushInteractive: true,
+    clearInteractive: true,
+    glowVisible: false,
+    overlayColor: 0xff4f9a,
+  });
+
+  autoMaskServer.autoComplete = true;
+  await activateAction(panelId, "mask-auto");
+  await expect.poll(() => autoMaskServer.requests.filter((request) => request.method === "POST")).toHaveLength(2);
+  await expect.poll(() => page.evaluate(() => ({
+    busy: window.__souvenirApp.maskEditor?.autoMaskBusy,
+    maskEnabled: window.__souvenirApp.store.getState().panels
+      .find((panel) => panel.id === window.__souvenirApp.maskEditor?.panelId)?.maskEnabled,
+    hasPaint: (() => {
+      const editor = window.__souvenirApp.maskEditor;
+      if (!editor?.canvas) return false;
+      return editor.canvas.getContext("2d").getImageData(
+        0,
+        0,
+        editor.canvas.width,
+        editor.canvas.height,
+      ).data.some((value, index) => index % 4 === 3 && value > 0);
+    })(),
+    alphaMap: (() => {
+      const editor = window.__souvenirApp.maskEditor;
+      if (!editor) return false;
+      return Boolean(
+        window.__souvenirApp.panelViews.get(editor.panelId)?.surface.material.alphaMap,
+      );
+    })(),
+  }))).toEqual({
+    busy: false,
+    maskEnabled: true,
+    hasPaint: true,
+    alphaMap: true,
+  });
 });
 
 test("loads a generated WebM mask into a VideoTexture and toggles it per panel", async ({ page }) => {

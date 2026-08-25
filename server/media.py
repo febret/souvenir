@@ -20,9 +20,11 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 VIDEO_SUFFIXES = {".mp4", ".webm"}
 CACHE_DIRECTORY = ".souvenir-thumbnails"
 MASK_DIRECTORY = ".souvenir-masks"
+DEPTH_DIRECTORY = ".souvenir-depth"
 TAG_STORAGE_FILE = ".souvenir-tags.json"
-INTERNAL_DIRECTORIES = {CACHE_DIRECTORY, MASK_DIRECTORY, ".souvenir-certs"}
-INTERNAL_FILES = {TAG_STORAGE_FILE}
+SCENE_STORAGE_FILE = ".souvenir-scenes.json"
+INTERNAL_DIRECTORIES = {CACHE_DIRECTORY, MASK_DIRECTORY, DEPTH_DIRECTORY, ".souvenir-certs"}
+INTERNAL_FILES = {TAG_STORAGE_FILE, SCENE_STORAGE_FILE}
 
 
 def normalize_relative(path: str | Path | None) -> Path:

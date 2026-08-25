@@ -54,10 +54,13 @@ export function normalizedStrokePoints(from, to, diameter) {
 
 export function paintEraseStroke(canvas, from, to, diameter) {
   const context = canvas.getContext("2d");
+  const mode = arguments[4] ?? "erase";
+  const erasingBackground = mode !== "restore";
   const points = normalizedStrokePoints(from, to, diameter);
   if (!points.length) return;
   const radius = (clampBrushSize(diameter) * Math.min(canvas.width, canvas.height)) / 2;
   context.save();
+  context.globalCompositeOperation = erasingBackground ? "source-over" : "destination-out";
   context.fillStyle = "#fff";
   for (const point of points) {
     context.beginPath();
@@ -107,16 +110,14 @@ export function opacityMapCanvas(maskCanvas, blur = 0) {
   const binary = binaryEraseMaskCanvas(maskCanvas);
   const binaryContext = binary.getContext("2d", { willReadFrequently: true });
   const source = binaryContext.getImageData(0, 0, binary.width, binary.height);
+  const width = maskCanvas.width;
+  const height = maskCanvas.height;
+  const coverage = softEdgeCoverage(source.data, width, height, clampMaskBlur(blur));
   const canvas = document.createElement("canvas");
-  canvas.width = maskCanvas.width;
-  canvas.height = maskCanvas.height;
+  canvas.width = width;
+  canvas.height = height;
   const context = canvas.getContext("2d", { willReadFrequently: true });
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.filter = `blur(${clampMaskBlur(blur)}px)`;
-  context.drawImage(binary, 0, 0);
-  context.filter = "none";
-  const coverage = context.getImageData(0, 0, canvas.width, canvas.height);
-  const output = context.createImageData(canvas.width, canvas.height);
+  const output = context.createImageData(width, height);
   for (let index = 0; index < coverage.data.length; index += 4) {
     const eraseCoverage = source.data[index + 3] === 255
       ? 255
@@ -129,6 +130,62 @@ export function opacityMapCanvas(maskCanvas, blur = 0) {
   }
   context.putImageData(output, 0, 0);
   return canvas;
+}
+
+function softEdgeCoverage(binaryRgba, width, height, blurRadius) {
+  const radius = Math.max(0, Math.round(blurRadius));
+  const alpha = new Uint8ClampedArray(width * height);
+  for (let index = 0; index < alpha.length; index += 1) {
+    alpha[index] = binaryRgba[index * 4 + 3];
+  }
+  if (radius <= 0) return alphaImage(alpha, width, height);
+  const horizontal = boxBlurAlpha(alpha, width, height, radius, true);
+  const vertical = boxBlurAlpha(horizontal, width, height, radius, false);
+  return alphaImage(vertical, width, height);
+}
+
+function boxBlurAlpha(alpha, width, height, radius, horizontal) {
+  const output = new Uint8ClampedArray(alpha.length);
+  const span = radius * 2 + 1;
+  if (horizontal) {
+    for (let y = 0; y < height; y += 1) {
+      let sum = 0;
+      for (let x = -radius; x <= radius; x += 1) {
+        const sampleX = Math.max(0, Math.min(width - 1, x));
+        sum += alpha[y * width + sampleX];
+      }
+      for (let x = 0; x < width; x += 1) {
+        output[y * width + x] = Math.round(sum / span);
+        const removeX = Math.max(0, x - radius);
+        const addX = Math.min(width - 1, x + radius + 1);
+        sum += alpha[y * width + addX] - alpha[y * width + removeX];
+      }
+    }
+    return output;
+  }
+  for (let x = 0; x < width; x += 1) {
+    let sum = 0;
+    for (let y = -radius; y <= radius; y += 1) {
+      const sampleY = Math.max(0, Math.min(height - 1, y));
+      sum += alpha[sampleY * width + x];
+    }
+    for (let y = 0; y < height; y += 1) {
+      output[y * width + x] = Math.round(sum / span);
+      const removeY = Math.max(0, y - radius);
+      const addY = Math.min(height - 1, y + radius + 1);
+      sum += alpha[addY * width + x] - alpha[removeY * width + x];
+    }
+  }
+  return output;
+}
+
+function alphaImage(alpha, width, height) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let index = 0; index < alpha.length; index += 1) {
+    const offset = index * 4;
+    data[offset + 3] = alpha[index];
+  }
+  return { data };
 }
 
 export function surfaceUvToSourceUv(uv, textureTransform = {}) {

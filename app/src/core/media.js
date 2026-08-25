@@ -27,6 +27,13 @@ export function normalizeMediaEntry(entry) {
     mtime,
     directory: path.split("/").slice(0, -1).join("/"),
     tag_ids: normalizeTagIds(entry?.tag_ids),
+    adm: {
+      configured: Boolean(entry?.adm?.configured),
+      enabled: Boolean(entry?.adm?.enabled),
+      depth_intensity: Number.isFinite(entry?.adm?.depth_intensity)
+        ? entry.adm.depth_intensity
+        : 0.35,
+    },
   };
 }
 

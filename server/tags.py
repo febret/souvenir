@@ -16,6 +16,8 @@ MAX_TAGS = 100
 MAX_TAG_NAME_LENGTH = 40
 MAX_COMMENTARY_CAPTION_LENGTH = 5000
 MAX_COMMENTARY_VOLUME = 4.0
+MAX_ADM_DEPTH_INTENSITY = 3.0
+DEFAULT_ADM_DEPTH_INTENSITY = 0.35
 
 
 class TagStore:
@@ -98,6 +100,29 @@ class TagStore:
             state = self._load()
             return state["commentary_volumes"].get(relative_text(relative), 1.0)
 
+    def media_adm_settings(self) -> dict[str, dict[str, bool | float]]:
+        with self._lock:
+            state = self._load()
+            return {
+                path: {
+                    "enabled": bool(setting["enabled"]),
+                    "depth_intensity": float(setting["depth_intensity"]),
+                }
+                for path, setting in state["media_adm_settings"].items()
+            }
+
+    def media_adm_setting(self, relative: Path) -> dict[str, bool | float | str]:
+        path = relative_text(relative)
+        with self._lock:
+            state = self._load()
+            setting = state["media_adm_settings"].get(path)
+            return {
+                "path": path,
+                "configured": isinstance(setting, dict),
+                "enabled": bool(setting["enabled"]) if isinstance(setting, dict) else False,
+                "depth_intensity": float(setting["depth_intensity"]) if isinstance(setting, dict) else DEFAULT_ADM_DEPTH_INTENSITY,
+            }
+
     def replace_assignment(self, relative: Path, tag_ids: object) -> dict[str, list[str] | str]:
         return self._replace("media_assignments", relative, tag_ids)
 
@@ -161,6 +186,27 @@ class TagStore:
             self._save(state)
             return {"path": path, "volume": normalized}
 
+    def replace_media_adm_setting(self, relative: Path, *, enabled: object, depth_intensity: object) -> dict[str, bool | float | str]:
+        path = relative_text(relative)
+        normalized_enabled = _adm_enabled(enabled)
+        normalized_intensity = _adm_depth_intensity(depth_intensity)
+        with self._lock:
+            state = self._load()
+            if normalized_enabled or normalized_intensity != DEFAULT_ADM_DEPTH_INTENSITY:
+                state["media_adm_settings"][path] = {
+                    "enabled": normalized_enabled,
+                    "depth_intensity": normalized_intensity,
+                }
+            else:
+                state["media_adm_settings"].pop(path, None)
+            self._save(state)
+            return {
+                "path": path,
+                "configured": True,
+                "enabled": normalized_enabled,
+                "depth_intensity": normalized_intensity,
+            }
+
     def _tag_ids(self, namespace: str, relative: Path) -> list[str]:
         with self._lock:
             state = self._load()
@@ -207,26 +253,35 @@ class TagStore:
         self._validate_state(loaded)
         if loaded["version"] == 1:
             return {
-                "version": 4,
+                "version": 5,
                 "updated_at": loaded["updated_at"],
                 "tags": loaded["tags"],
                 "media_assignments": loaded["assignments"],
                 "commentary_assignments": {},
                 "commentary_captions": {},
                 "commentary_volumes": {},
+                "media_adm_settings": {},
             }
         if loaded["version"] == 2:
             return {
                 **loaded,
-                "version": 4,
+                "version": 5,
                 "commentary_captions": {},
                 "commentary_volumes": {},
+                "media_adm_settings": {},
             }
         if loaded["version"] == 3:
             return {
                 **loaded,
-                "version": 4,
+                "version": 5,
                 "commentary_volumes": {},
+                "media_adm_settings": {},
+            }
+        if loaded["version"] == 4:
+            return {
+                **loaded,
+                "version": 5,
+                "media_adm_settings": {},
             }
         return loaded
 
@@ -295,6 +350,18 @@ class TagStore:
                 "commentary_volumes",
             }
             namespaces = [state.get("media_assignments"), state.get("commentary_assignments")]
+        elif version == 5 and not isinstance(version, bool):
+            required = {
+                "version",
+                "updated_at",
+                "tags",
+                "media_assignments",
+                "commentary_assignments",
+                "commentary_captions",
+                "commentary_volumes",
+                "media_adm_settings",
+            }
+            namespaces = [state.get("media_assignments"), state.get("commentary_assignments")]
         else:
             raise HTTPException(500, "tag storage is malformed")
         if set(state) != required:
@@ -342,23 +409,30 @@ class TagStore:
                 raise HTTPException(500, "tag storage is malformed")
             for path, caption in captions.items():
                 _validate_commentary_caption(path, caption)
-        if version == 4:
+        if version in (4, 5):
             volumes = state["commentary_volumes"]
             if not isinstance(volumes, dict):
                 raise HTTPException(500, "tag storage is malformed")
             for path, volume in volumes.items():
                 _validate_commentary_volume(path, volume)
+        if version == 5:
+            adm_settings = state["media_adm_settings"]
+            if not isinstance(adm_settings, dict):
+                raise HTTPException(500, "tag storage is malformed")
+            for path, setting in adm_settings.items():
+                _validate_media_adm_setting(path, setting)
 
 
 def _empty_state() -> dict:
     return {
-        "version": 4,
+        "version": 5,
         "updated_at": None,
         "tags": [],
         "media_assignments": {},
         "commentary_assignments": {},
         "commentary_captions": {},
         "commentary_volumes": {},
+        "media_adm_settings": {},
     }
 
 
@@ -419,7 +493,7 @@ def _commentary_volume(value: object) -> float:
         raise HTTPException(422, "volume must be a number")
     volume = float(value)
     if not 0 <= volume <= MAX_COMMENTARY_VOLUME:
-        raise HTTPException(422, "volume must be between 0 and 2")
+        raise HTTPException(422, "volume must be between 0 and 4")
     return round(volume, 2)
 
 
@@ -430,4 +504,32 @@ def _validate_commentary_volume(path: object, volume: object) -> None:
     except HTTPException as error:
         raise HTTPException(500, "tag storage is malformed") from error
     if normalized != volume or normalized == 1.0:
+        raise HTTPException(500, "tag storage is malformed")
+
+
+def _adm_enabled(value: object) -> bool:
+    if not isinstance(value, bool):
+        raise HTTPException(422, "enabled must be a boolean")
+    return value
+
+
+def _adm_depth_intensity(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(422, "depth_intensity must be a number")
+    intensity = float(value)
+    if not 0 <= intensity <= MAX_ADM_DEPTH_INTENSITY:
+        raise HTTPException(422, "depth_intensity must be between 0 and 3")
+    return round(intensity, 2)
+
+
+def _validate_media_adm_setting(path: object, setting: object) -> None:
+    _validate_assignment(path, [], [])
+    if not isinstance(setting, dict) or set(setting) != {"enabled", "depth_intensity"}:
+        raise HTTPException(500, "tag storage is malformed")
+    try:
+        enabled = _adm_enabled(setting["enabled"])
+        depth_intensity = _adm_depth_intensity(setting["depth_intensity"])
+    except HTTPException as error:
+        raise HTTPException(500, "tag storage is malformed") from error
+    if enabled != setting["enabled"] or depth_intensity != setting["depth_intensity"]:
         raise HTTPException(500, "tag storage is malformed")

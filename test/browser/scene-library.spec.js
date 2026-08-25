@@ -211,7 +211,7 @@ test("keeps a confirmed media tag when a second rapid menu activation arrives du
   let holdFirstSave = true;
   const tagServer = {
     tags: [{ id: "horse", name: "Horse" }, { id: "blue", name: "Blue" }],
-    assignments: new Map(),
+    assignments: new Map([["albums/beach.jpg", []]]),
     requests: [],
     nextId: 1,
   };
@@ -233,28 +233,35 @@ test("keeps a confirmed media tag when a second rapid menu activation arrives du
   await page.goto("/?debug=1");
   await page.locator('.directory-row input[value="albums"]').check();
   await page.locator("#preview-button").click();
+  await expect.poll(() => page.evaluate(() => Boolean(window.__souvenirApp?.store))).toBe(true);
   const panelId = await page.evaluate(() => window.__souvenirApp.store.getState().focusedId);
   await selectBeachImage(page, panelId);
-  await clickSceneObject(page, { action: "toggle-media-tags", panelId });
+  await clickSceneObject(page, { action: "toggle-options", panelId });
   await expect.poll(() => page.evaluate((id) =>
-    window.__souvenirApp.panelViews.get(id)?.tagMenu?.visible, panelId)).toBe(true);
+    window.__souvenirApp.panelViews.get(id)?.optionsPanel?.visible, panelId)).toBe(true);
 
   const pending = await page.evaluate((id) => {
-    const menu = window.__souvenirApp.panelViews.get(id).tagMenu;
-    void menu.handleAction("toggle-media-tag:horse");
-    void menu.handleAction("toggle-media-tag:blue");
-    return { pending: menu.actionPending, selectedTagIds: menu.userData.selectedTagIds };
+    const app = window.__souvenirApp;
+    app.panelCoordinator.handleAction(id, "toggle-media-tag:horse");
+    app.panelCoordinator.handleAction(id, "toggle-media-tag:blue");
+    return {
+      pending: app.panelCoordinator.isTagSavePending(id),
+      mediaTagIds: app.panelViews.get(id).mediaTagIds,
+    };
   }, panelId);
-  expect(pending).toEqual({ pending: true, selectedTagIds: ["horse"] });
+  expect(pending).toEqual({ pending: true, mediaTagIds: [] });
   await expect.poll(() => tagServer.requests.filter((request) => request.method === "PUT"))
     .toHaveLength(1);
   expect(tagServer.requests.at(-1)).toMatchObject({ path: "albums/beach.jpg", tagIds: ["horse"] });
 
   releaseFirstSave();
   await expect.poll(() => page.evaluate((id) => {
-    const menu = window.__souvenirApp.panelViews.get(id).tagMenu;
-    return { pending: menu.actionPending, selectedTagIds: menu.userData.selectedTagIds };
-  }, panelId)).toEqual({ pending: false, selectedTagIds: ["horse"] });
+    const app = window.__souvenirApp;
+    return {
+      pending: app.panelCoordinator.isTagSavePending(id),
+      mediaTagIds: app.panelViews.get(id).mediaTagIds,
+    };
+  }, panelId)).toEqual({ pending: false, mediaTagIds: ["horse"] });
   await expect.poll(() => tagServer.assignments.get("albums/beach.jpg")).toEqual(["horse"]);
   expect(tagServer.requests.filter((request) => request.method === "PUT")).toHaveLength(1);
 
@@ -266,7 +273,7 @@ test("keeps a confirmed media tag when a second rapid menu activation arrives du
     return panel.id;
   });
   await expect.poll(() => page.evaluate((id) =>
-    window.__souvenirApp.panelViews.get(id)?.tagMenu?.userData.selectedTagIds, secondPanelId,
+    window.__souvenirApp.panelViews.get(id)?.mediaTagIds, secondPanelId,
   )).toEqual(["horse"]);
 });
 

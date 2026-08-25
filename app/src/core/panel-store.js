@@ -1,13 +1,32 @@
 import { SORT_MODES, mediaId } from "./media.js";
-import { DEFAULT_DISPLAY_MODE, normalizeDisplayMode } from "./media-display.js";
-import {
-  DEFAULT_ASPECT_RATIO_MODE,
-  normalizeAspectRatioMode,
-} from "./aspect-ratio.js";
 import { normalizeTagIds } from "./tags.js";
 
-export const MINIMIZED_DIMENSIONS = Object.freeze({ width: 0.28, height: 0.18 });
+export const SAVE_MODES = Object.freeze(["disabled", "scale", "full"]);
+export const DEFAULT_SAVE_MODE = "scale";
+
+/**
+ * Fixed outline palette. Panels are identified by number and color; color is
+ * derived from the panel's creation order.
+ */
+export const PANEL_COLORS = Object.freeze([
+  "#9be7b5",
+  "#8ec9ff",
+  "#ffd28e",
+  "#f2a2c0",
+  "#c9b3ff",
+  "#a7f0dc",
+  "#ffe08a",
+  "#b6e39a",
+]);
+
+export function panelColor(index) {
+  const resolved = Number.isInteger(index) && index >= 0 ? index : 0;
+  return PANEL_COLORS[resolved % PANEL_COLORS.length];
+}
+
 const DEFAULT_DIMENSIONS = Object.freeze({ width: 1.2, height: 0.8 });
+const MINIMIZED_DIMENSIONS = Object.freeze({ width: 0.28, height: 0.18 });
+const DEFAULT_DEPTH_INTENSITY = 0.35;
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const numberOr = (value, fallback) => Number.isFinite(value) ? value : fallback;
@@ -20,23 +39,46 @@ const dimensions = (value, fallback = DEFAULT_DIMENSIONS) => ({
   width: Math.max(0.05, numberOr(value?.width, fallback.width)),
   height: Math.max(0.05, numberOr(value?.height, fallback.height)),
 });
+const depthIntensity = (value) => Math.min(3, Math.max(0, numberOr(value, DEFAULT_DEPTH_INTENSITY)));
+
+export function normalizeSaveMode(mode) {
+  return SAVE_MODES.includes(mode) ? mode : DEFAULT_SAVE_MODE;
+}
+
+/**
+ * Builds a normalized per-media saved pose entry.
+ *
+ * `scale` entries persist only dimensions; `full` entries also persist the
+ * panel position and orientation.
+ */
+function mediaPose(entry, saveMode) {
+  if (!entry || typeof entry !== "object") return null;
+  const dims = dimensions(entry.dimensions ?? entry.scale ?? entry);
+  const pose = { scale: { width: dims.width, height: dims.height } };
+  if (saveMode === "full" && entry.transform) {
+    pose.transform = {
+      position: vector(entry.transform.position, { x: 0, y: 0, z: -1 }),
+      rotation: vector(entry.transform.rotation, { x: 0, y: 0, z: 0 }),
+    };
+  }
+  return pose;
+}
 
 export function createPanel({ id, ...overrides } = {}) {
   if (!id) {
     throw new TypeError("A panel id is required.");
   }
-  const normalDimensions = dimensions(overrides.restoreDimensions ?? overrides.dimensions);
+  const saveMode = normalizeSaveMode(overrides.saveMode);
   const minimized = Boolean(overrides.minimized);
+  const panelDimensions = dimensions(overrides.dimensions);
   return {
     id: String(id),
     locked: Boolean(overrides.locked),
     minimized,
-    zoomMode: Boolean(overrides.zoomMode),
     maskEnabled: overrides.maskEnabled !== false,
-    displayMode: normalizeDisplayMode(overrides.displayMode ?? DEFAULT_DISPLAY_MODE),
-    aspectRatioMode: normalizeAspectRatioMode(
-      overrides.aspectRatioMode ?? DEFAULT_ASPECT_RATIO_MODE,
-    ),
+    admEnabled: Boolean(overrides.admEnabled),
+    depthIntensity: depthIntensity(overrides.depthIntensity),
+    saveMode,
     tagFilter: normalizeTagIds(overrides.tagFilter),
     media: {
       directory: typeof overrides.media?.directory === "string" ? overrides.media.directory : null,
@@ -48,31 +90,46 @@ export function createPanel({ id, ...overrides } = {}) {
       position: vector(overrides.transform?.position, { x: 0, y: 0, z: -1 }),
       rotation: vector(overrides.transform?.rotation, { x: 0, y: 0, z: 0 }),
     },
-    dimensions: minimized ? { ...MINIMIZED_DIMENSIONS } : normalDimensions,
-    restoreDimensions: normalDimensions,
-    content: {
-      pan: vector(overrides.content?.pan, { x: 0, y: 0, z: 0 }),
-      zoom: Math.min(8, Math.max(0.25, numberOr(overrides.content?.zoom, 1))),
-    },
-    mediaScales: normalizeMediaScales(overrides.mediaScales),
+    dimensions: minimized ? dimensions(overrides.dimensions, MINIMIZED_DIMENSIONS) : panelDimensions,
+    restoreDimensions: dimensions(
+      overrides.restoreDimensions,
+      minimized ? panelDimensions : panelDimensions,
+    ),
+    // Per-media saved poses keyed by media id. Legacy `mediaScales` maps are
+    // migrated into scale-only entries. Disabled save mode never keeps poses.
+    mediaPoses: saveMode === "disabled"
+      ? {}
+      : normalizeMediaPoses(overrides.mediaPoses ?? migrateMediaScales(overrides.mediaScales), saveMode),
   };
 }
 
 /**
- * Per-media panel scale memory. Maps media id -> panel dimensions that were
- * active while that media was displayed, so switching back to an item restores
- * its own panel scale instead of a shared zoom level.
+ * Migrates a legacy `mediaScales` map ({mediaId: {width,height}}) into the
+ * saved-pose shape.
  */
-export function normalizeMediaScales(value) {
-  const scales = {};
-  if (!value || typeof value !== "object") return scales;
+function migrateMediaScales(value) {
+  if (!value || typeof value !== "object") return undefined;
+  const migrated = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!key || !entry || typeof entry !== "object") continue;
+    migrated[key] = { dimensions: entry };
+  }
+  return migrated;
+}
+
+/**
+ * Normalizes a per-media saved-pose map. Entries whose transform is missing
+ * are kept as scale-only regardless of the requested save mode.
+ */
+export function normalizeMediaPoses(value, saveMode = DEFAULT_SAVE_MODE) {
+  const poses = {};
+  if (!value || typeof value !== "object") return poses;
   for (const [mediaIdKey, entry] of Object.entries(value)) {
     if (!mediaIdKey) continue;
-    const dims = dimensions(entry);
-    if (!dims) continue;
-    scales[mediaIdKey] = { width: dims.width, height: dims.height };
+    const pose = mediaPose(entry, saveMode === "full" ? "full" : "scale");
+    if (pose) poses[mediaIdKey] = pose;
   }
-  return scales;
+  return poses;
 }
 
 export function restorePanel(serialized, media) {
@@ -106,9 +163,9 @@ export function createPanelStore({ panels = [], focusedId = null, media, idFacto
   const subscribers = new Set();
   const makeId = idFactory ?? (() => `panel-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
 
-  function emit() {
+  function emit(change = { type: "reset", panelIds: [] }) {
     const snapshot = copy(state);
-    subscribers.forEach((subscriber) => subscriber(snapshot));
+    subscribers.forEach((subscriber) => subscriber(snapshot, change));
     return snapshot;
   }
   function updatePanel(id, update) {
@@ -131,72 +188,269 @@ export function createPanelStore({ panels = [], focusedId = null, media, idFacto
       if (state.panels.some((existing) => existing.id === panel.id)) throw new Error(`Panel "${panel.id}" already exists.`);
       state.panels.push(panel);
       state.focusedId = panel.id;
-      emit();
+      emit({ type: "structure", panelIds: [panel.id], focusChanged: true });
       return copy(panel);
     },
     remove(id) {
       const index = state.panels.findIndex((panel) => panel.id === id);
       if (index < 0) return false;
+      const focusChanged = state.focusedId === id;
       state.panels.splice(index, 1);
-      if (state.focusedId === id) state.focusedId = state.panels.at(-1)?.id ?? null;
-      emit();
+      if (focusChanged) state.focusedId = state.panels.at(-1)?.id ?? null;
+      emit({ type: "structure", panelIds: [id], focusChanged });
       return true;
     },
     focus(id) {
       if (!state.panels.some((panel) => panel.id === id)) return false;
+      if (state.focusedId === id) return true;
+      const previousFocusedId = state.focusedId;
       state.focusedId = id;
-      emit();
+      emit({
+        type: "focus",
+        panelIds: [previousFocusedId, id].filter(Boolean),
+        focusChanged: true,
+      });
       return true;
     },
     setMedia(id, selectedId) {
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      const nextSelectedId = selectedId == null ? null : String(selectedId);
+      if (current.media.selectedId === nextSelectedId) return copy(current);
       const panel = updatePanel(id, (item) => {
-        // Remember the panel scale currently shown for the outgoing media so it
-        // can be restored when that media is shown again.
-        if (item.media.selectedId && Number.isFinite(item.dimensions?.width)) {
-          item.mediaScales[item.media.selectedId] = {
-            width: item.dimensions.width,
-            height: item.dimensions.height,
-          };
+        // Remember the outgoing media's saved pose so it can be restored when
+        // that media is shown again.
+        if (item.media.selectedId && item.saveMode !== "disabled") {
+          const pose = mediaPose({
+            dimensions: item.dimensions,
+            transform: item.saveMode === "full" ? item.transform : null,
+          }, item.saveMode);
+          if (pose) item.mediaPoses[item.media.selectedId] = pose;
         }
-        item.media.selectedId = selectedId == null ? null : String(selectedId);
-        const remembered = selectedId == null ? null : item.mediaScales[String(selectedId)];
-        if (remembered) {
-          item.restoreDimensions = { ...remembered };
-          if (!item.minimized) item.dimensions = { ...remembered };
+        item.media.selectedId = nextSelectedId;
+        // Restore the incoming media's saved pose when save mode allows.
+        if (selectedId != null && item.saveMode !== "disabled") {
+          const remembered = item.mediaPoses[String(selectedId)];
+          if (remembered?.scale) item.dimensions = { ...remembered.scale };
+          if (remembered?.transform) item.transform = copy(remembered.transform);
         }
       });
       if (!panel) return null;
-      emit();
+      emit({ type: "panel", panelIds: [id] });
       return copy(panel);
     },
-    setMediaScale(id, mediaKey, nextDimensions) {
+    setMediaContext(id, { directory, sort, view, selectedId } = {}) {
+      if (sort != null && !Object.values(SORT_MODES).includes(sort)) {
+        throw new TypeError("Unknown media sort.");
+      }
+      if (view != null && !["names", "thumbnails", "grid"].includes(view)) {
+        throw new TypeError("Unknown media view.");
+      }
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      const nextDirectory = directory || null;
+      const nextSelectedId = selectedId == null ? null : String(selectedId);
+      if (current.media.directory === nextDirectory
+        && current.media.sort === (sort ?? current.media.sort)
+        && current.media.view === (view ?? current.media.view)
+        && current.media.selectedId === nextSelectedId) {
+        return copy(current);
+      }
       const panel = updatePanel(id, (item) => {
-        if (!mediaKey) return;
-        const dims = dimensions(nextDimensions, item.restoreDimensions);
-        item.mediaScales[String(mediaKey)] = { width: dims.width, height: dims.height };
+        if (item.media.selectedId && item.media.selectedId !== nextSelectedId
+          && item.saveMode !== "disabled") {
+          const pose = mediaPose({
+            dimensions: item.dimensions,
+            transform: item.saveMode === "full" ? item.transform : null,
+          }, item.saveMode);
+          if (pose) item.mediaPoses[item.media.selectedId] = pose;
+        }
+        item.media.directory = nextDirectory;
+        if (sort != null) item.media.sort = sort;
+        if (view != null) item.media.view = view;
+        item.media.selectedId = nextSelectedId;
+        if (nextSelectedId && item.saveMode !== "disabled") {
+          const remembered = item.mediaPoses[nextSelectedId];
+          if (remembered?.scale) item.dimensions = { ...remembered.scale };
+          if (remembered?.transform) item.transform = copy(remembered.transform);
+        }
+      });
+      emit({ type: "panel", panelIds: [id] });
+      return copy(panel);
+    },
+    setMediaPose(id, mediaKey, pose) {
+      const panel = updatePanel(id, (item) => {
+        if (!mediaKey || item.saveMode === "disabled") return;
+        const normalized = mediaPose(pose, item.saveMode);
+        if (normalized) item.mediaPoses[String(mediaKey)] = normalized;
       });
       if (!panel) return null;
-      emit();
+      emit({ type: "panel", panelIds: [id] });
+      return copy(panel);
+    },
+    setSaveMode(id, mode) {
+      const nextMode = normalizeSaveMode(mode);
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      if (current.saveMode === nextMode) return copy(current);
+      const panel = updatePanel(id, (item) => {
+        item.saveMode = nextMode;
+        // Downgrading to disabled drops per-media poses; upgrading re-records
+        // the current media's pose immediately.
+        if (nextMode === "disabled") {
+          item.mediaPoses = {};
+        } else if (item.media.selectedId) {
+          const pose = mediaPose({
+            dimensions: item.dimensions,
+            transform: nextMode === "full" ? item.transform : null,
+          }, nextMode);
+          if (pose) item.mediaPoses[item.media.selectedId] = pose;
+        }
+      });
+      if (!panel) return null;
+      emit({ type: "panel", panelIds: [id] });
+      return copy(panel);
+    },
+    setLocked(id, locked) {
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      if (current.locked === Boolean(locked)) return copy(current);
+      const panel = updatePanel(id, (item) => { item.locked = Boolean(locked); });
+      emit({ type: "panel", panelIds: [id] });
+      return copy(panel);
+    },
+    minimize(id) {
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      if (current.minimized) return copy(current);
+      const panel = updatePanel(id, (item) => {
+        item.restoreDimensions = { ...item.dimensions };
+        item.dimensions = { ...MINIMIZED_DIMENSIONS };
+        item.minimized = true;
+      });
+      emit({ type: "panel", panelIds: [id] });
+      return copy(panel);
+    },
+    restore(id) {
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      if (!current.minimized) return copy(current);
+      const panel = updatePanel(id, (item) => {
+        item.dimensions = dimensions(item.restoreDimensions);
+        item.minimized = false;
+      });
+      emit({ type: "panel", panelIds: [id] });
+      return copy(panel);
+    },
+    setMaskEnabled(id, maskEnabled) {
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      if (current.maskEnabled === Boolean(maskEnabled)) return copy(current);
+      const panel = updatePanel(id, (item) => { item.maskEnabled = Boolean(maskEnabled); });
+      emit({ type: "panel", panelIds: [id] });
+      return copy(panel);
+    },
+    setAdmEnabled(id, enabled) {
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      if (current.admEnabled === Boolean(enabled)) return copy(current);
+      const panel = updatePanel(id, (item) => { item.admEnabled = Boolean(enabled); });
+      emit({ type: "panel", panelIds: [id] });
+      return copy(panel);
+    },
+    setDepthIntensity(id, value) {
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      const next = depthIntensity(value);
+      if (current.depthIntensity === next) return copy(current);
+      const panel = updatePanel(id, (item) => { item.depthIntensity = next; });
+      emit({ type: "panel", panelIds: [id] });
+      return copy(panel);
+    },
+    setTransform(id, transform) {
+      return this.setPose(id, { transform });
+    },
+    setPose(id, { transform, dimensions: nextDimensions } = {}) {
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      const nextTransform = transform
+        ? {
+          position: vector(transform.position, current.transform.position),
+          rotation: vector(transform.rotation, current.transform.rotation),
+        }
+        : current.transform;
+      const nextDimensionsValue = nextDimensions
+        ? dimensions(nextDimensions, current.dimensions)
+        : current.dimensions;
+      const transformChanged = ["x", "y", "z"].some((axis) =>
+        nextTransform.position[axis] !== current.transform.position[axis]
+        || nextTransform.rotation[axis] !== current.transform.rotation[axis]);
+      const dimensionsChanged = nextDimensionsValue.width !== current.dimensions.width
+        || nextDimensionsValue.height !== current.dimensions.height;
+      if (!transformChanged && !dimensionsChanged) return copy(current);
+      const panel = updatePanel(id, (item) => {
+        item.transform = nextTransform;
+        item.dimensions = nextDimensionsValue;
+        // Keep the displayed media's full pose up to date while saving fully.
+        if (item.saveMode !== "disabled" && item.media.selectedId) {
+          const pose = mediaPose({
+            dimensions: item.dimensions,
+            transform: item.saveMode === "full" ? item.transform : null,
+          }, item.saveMode);
+          if (pose) item.mediaPoses[item.media.selectedId] = pose;
+        }
+      });
+      emit({ type: "panel", panelIds: [id] });
+      return copy(panel);
+    },
+    setDimensions(id, nextDimensions) {
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      const next = dimensions(nextDimensions, current.dimensions);
+      if (next.width === current.dimensions.width && next.height === current.dimensions.height) {
+        return copy(current);
+      }
+      const panel = updatePanel(id, (item) => {
+        item.dimensions = next;
+        // Track the panel scale for the displayed media while saving scale or
+        // fully.
+        if (item.saveMode !== "disabled" && item.media.selectedId) {
+          const pose = mediaPose({
+            dimensions: next,
+            transform: item.saveMode === "full" ? item.transform : null,
+          }, item.saveMode);
+          if (pose) item.mediaPoses[item.media.selectedId] = pose;
+        }
+      });
+      if (!panel) return null;
+      emit({ type: "panel", panelIds: [id] });
       return copy(panel);
     },
     setDirectory(id, directory) {
-      const panel = updatePanel(id, (item) => { item.media.directory = directory || null; item.media.selectedId = null; });
-      if (!panel) return null;
-      emit();
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      const next = directory || null;
+      if (current.media.directory === next && current.media.selectedId == null) return copy(current);
+      const panel = updatePanel(id, (item) => { item.media.directory = next; item.media.selectedId = null; });
+      emit({ type: "panel", panelIds: [id] });
       return copy(panel);
     },
     setSort(id, sort) {
       if (!Object.values(SORT_MODES).includes(sort)) throw new TypeError("Unknown media sort.");
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      if (current.media.sort === sort) return copy(current);
       const panel = updatePanel(id, (item) => { item.media.sort = sort; });
-      if (!panel) return null;
-      emit();
+      emit({ type: "panel", panelIds: [id] });
       return copy(panel);
     },
     setView(id, view) {
       if (!["names", "thumbnails", "grid"].includes(view)) throw new TypeError("Unknown media view.");
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      if (current.media.view === view) return copy(current);
       const panel = updatePanel(id, (item) => { item.media.view = view; });
-      if (!panel) return null;
-      emit();
+      emit({ type: "panel", panelIds: [id] });
       return copy(panel);
     },
     setTagFilter(id, tagIds) {
@@ -208,7 +462,7 @@ export function createPanelStore({ panels = [], focusedId = null, media, idFacto
         return copy(current);
       }
       const panel = updatePanel(id, (item) => { item.tagFilter = nextIds; });
-      emit();
+      emit({ type: "panel", panelIds: [id] });
       return copy(panel);
     },
     reconcileTagFilters(tagIds) {
@@ -221,123 +475,9 @@ export function createPanelStore({ panels = [], focusedId = null, media, idFacto
           changed = true;
         }
       }
-      return changed ? emit() : copy(state);
-    },
-    setLocked(id, locked) {
-      const panel = updatePanel(id, (item) => { item.locked = Boolean(locked); });
-      if (!panel) return null;
-      emit();
-      return copy(panel);
-    },
-    setZoomMode(id, zoomMode) {
-      const panel = updatePanel(id, (item) => { item.zoomMode = Boolean(zoomMode); });
-      if (!panel) return null;
-      emit();
-      return copy(panel);
-    },
-    setMaskEnabled(id, maskEnabled) {
-      const panel = updatePanel(id, (item) => { item.maskEnabled = Boolean(maskEnabled); });
-      if (!panel) return null;
-      emit();
-      return copy(panel);
-    },
-    setDisplayMode(id, displayMode) {
-      const panel = updatePanel(id, (item) => {
-        item.displayMode = normalizeDisplayMode(displayMode);
-      });
-      if (!panel) return null;
-      emit();
-      return copy(panel);
-    },
-    setAspectRatioMode(id, aspectRatioMode) {
-      const current = state.panels.find((panel) => panel.id === id);
-      if (!current) return null;
-      const nextMode = normalizeAspectRatioMode(aspectRatioMode);
-      if (current.aspectRatioMode === nextMode) return copy(current);
-      const panel = updatePanel(id, (item) => {
-        item.aspectRatioMode = nextMode;
-      });
-      emit();
-      return copy(panel);
-    },
-    setTransform(id, transform) {
-      const panel = updatePanel(id, (item) => {
-        item.transform = {
-          position: vector(transform?.position, item.transform.position),
-          rotation: vector(transform?.rotation, item.transform.rotation),
-        };
-      });
-      if (!panel) return null;
-      emit();
-      return copy(panel);
-    },
-    setDimensions(id, nextDimensions) {
-      const current = state.panels.find((panel) => panel.id === id);
-      if (!current) return null;
-      const next = dimensions(nextDimensions, current.restoreDimensions);
-      const restoreUnchanged =
-        next.width === current.restoreDimensions.width &&
-        next.height === current.restoreDimensions.height;
-      const visibleUnchanged = current.minimized ||
-        (next.width === current.dimensions.width && next.height === current.dimensions.height);
-      if (restoreUnchanged && visibleUnchanged) return copy(current);
-      const panel = updatePanel(id, (item) => {
-        item.restoreDimensions = next;
-        if (!item.minimized) item.dimensions = next;
-        // Track the panel scale per displayed media instead of a shared
-        // content-zoom level.
-        if (item.media.selectedId) {
-          item.mediaScales[item.media.selectedId] = { width: next.width, height: next.height };
-        }
-      });
-      if (!panel) return null;
-      emit();
-      return copy(panel);
-    },
-    setContentPan(id, pan) {
-      const panel = updatePanel(id, (item) => {
-        item.content.pan = vector(pan, item.content.pan);
-      });
-      if (!panel) return null;
-      emit();
-      return copy(panel);
-    },
-    setContentZoom(id, zoom) {
-      const panel = updatePanel(id, (item) => {
-        item.content.zoom = Math.min(8, Math.max(0.25, numberOr(zoom, item.content.zoom)));
-      });
-      if (!panel) return null;
-      emit();
-      return copy(panel);
-    },
-    minimize(id) {
-      const panel = updatePanel(id, (item) => {
-        if (!item.minimized) {
-          item.restoreDimensions = dimensions(item.dimensions);
-          item.minimized = true;
-          item.dimensions = { ...MINIMIZED_DIMENSIONS };
-        }
-      });
-      if (!panel) return null;
-      emit();
-      return copy(panel);
-    },
-    restore(id) {
-      const panel = updatePanel(id, (item) => {
-        if (item.minimized) {
-          item.minimized = false;
-          item.dimensions = dimensions(item.restoreDimensions);
-        }
-      });
-      if (!panel) return null;
-      emit();
-      return copy(panel);
-    },
-    update(id, callback) {
-      const panel = updatePanel(id, callback);
-      if (!panel) return null;
-      emit();
-      return copy(panel);
+      return changed
+        ? emit({ type: "panels", panelIds: state.panels.map((panel) => panel.id) })
+        : copy(state);
     },
     restoreFrom(serialized) {
       state = {
@@ -346,7 +486,11 @@ export function createPanelStore({ panels = [], focusedId = null, media, idFacto
       };
       state.focusedId = state.panels.some((panel) => panel.id === serialized?.focusedId)
         ? serialized.focusedId : state.panels.at(-1)?.id ?? null;
-      return emit();
+      return emit({
+        type: "structure",
+        panelIds: state.panels.map((panel) => panel.id),
+        focusChanged: true,
+      });
     },
   };
 }

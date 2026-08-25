@@ -277,6 +277,52 @@
   outline-offset: 2px;
 }
 
+.playback-scenes {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid #293835;
+}
+
+.playback-scenes .scene-controls {
+  display: grid;
+  gap: 14px;
+}
+
+.playback-scenes .scene-controls-row {
+  display: grid;
+  grid-template-columns: auto minmax(100px, 1fr) minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.playback-scenes .scene-controls-row:nth-child(2) {
+  grid-template-columns: auto auto minmax(80px, 1fr) auto minmax(100px, 1fr);
+}
+
+.playback-scenes .scene-controls-row:nth-child(3) {
+  grid-template-columns: auto minmax(120px, 1fr) auto auto;
+}
+
+.playback-scenes .scene-controls label,
+.playback-scenes .scene-controls output {
+  color: #aab9b4;
+  font-size: 0.78rem;
+}
+
+.playback-scenes .scene-controls input,
+.playback-scenes .scene-controls select {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #40534c;
+  border-radius: 9px;
+  color: #e8efec;
+  background: #131f1d;
+}
+
+.playback-scenes .scene-controls input[type="range"] {
+  padding: 0;
+}
+
 .inline-state {
   padding: 18px;
   border: 1px dashed #31403c;

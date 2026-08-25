@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from collections.abc import AsyncIterator
@@ -7,9 +8,35 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 
+from .auto_depth import AutoDepthGenerator
+from .auto_mask import AutoMaskGenerator
 from .config import commentary_dir, library_id, load_settings
 from .library import LibraryScanService, LibraryScanner
 from .routes import add_routes
+
+
+def _suppress_windows_connection_reset_noise() -> tuple[asyncio.AbstractEventLoop, object | None]:
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+
+    def _handler(active_loop: asyncio.AbstractEventLoop, context: dict[str, object]) -> None:
+        exception = context.get("exception")
+        handle = context.get("handle")
+        callback = getattr(handle, "_callback", None)
+        callback_name = getattr(callback, "__qualname__", "")
+        if (
+            isinstance(exception, ConnectionResetError)
+            and getattr(exception, "winerror", None) == 10054
+            and "_ProactorBasePipeTransport._call_connection_lost" in callback_name
+        ):
+            return
+        if previous_handler is not None:
+            previous_handler(active_loop, context)
+            return
+        active_loop.default_exception_handler(context)
+
+    loop.set_exception_handler(_handler)
+    return loop, previous_handler
 
 
 def create_app(
@@ -17,6 +44,8 @@ def create_app(
     *,
     library_scanner: LibraryScanner | None = None,
     commentary_home: str | Path | None = None,
+    auto_mask_generator: AutoMaskGenerator | None = None,
+    auto_depth_generator: AutoDepthGenerator | None = None,
 ) -> FastAPI:
     settings = load_settings() if media_home is None else None
     root = Path(media_home).expanduser().resolve() if media_home is not None else settings.media_home
@@ -33,15 +62,29 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        loop, previous_handler = _suppress_windows_connection_reset_noise()
         app.state.library_scan.start()
-        yield
+        app.state.auto_mask_service.start()
+        app.state.auto_depth_service.start()
+        try:
+            yield
+        finally:
+            app.state.auto_depth_service.stop()
+            app.state.auto_mask_service.stop()
+            loop.set_exception_handler(previous_handler)
 
     app = FastAPI(title="Souvenir", version="1.0.0", lifespan=lifespan)
     app.state.media_home = root
     app.state.commentary_home = commentary_root
     app.state.library_id = library_id(root)
     app.state.library_scan = library_scan
-    add_routes(app, root, commentary_root)
+    add_routes(
+        app,
+        root,
+        commentary_root,
+        auto_mask_generator=auto_mask_generator,
+        auto_depth_generator=auto_depth_generator,
+    )
     _add_static_application(app)
     return app
 

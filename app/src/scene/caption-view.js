@@ -44,6 +44,11 @@ export class CaptionView extends THREE.Mesh {
     this.frustumCulled = false;
     this.renderOrder = 1000;
     this.currentText = "";
+    this.currentStyle = { size: null, transparency: null };
+    this.cameraPosition = new THREE.Vector3();
+    this.cameraOrientation = new THREE.Quaternion();
+    this.cameraForward = new THREE.Vector3();
+    this.eyePosition = new THREE.Vector3();
     this.visible = false;
   }
 
@@ -60,21 +65,28 @@ export class CaptionView extends THREE.Mesh {
 
   setStyle({ size = 1, transparency = 0.1 } = {}) {
     const scale = Math.min(2, Math.max(0.5, Number(size) || 1));
-    this.scale.setScalar(scale);
-    this.material.opacity = 1 - Math.min(0.8, Math.max(0, Number(transparency) || 0));
+    const opacity = 1 - Math.min(0.8, Math.max(0, Number(transparency) || 0));
+    if (this.currentStyle.size !== scale) {
+      this.currentStyle.size = scale;
+      this.scale.setScalar(scale);
+    }
+    if (this.currentStyle.transparency !== opacity) {
+      this.currentStyle.transparency = opacity;
+      this.material.opacity = opacity;
+    }
   }
 
   updatePose(camera, distance = 1.2) {
     const viewCamera = camera?.cameras?.[0] ?? camera;
     if (!viewCamera) return;
-    const position = cameraWorldCenter(camera, new THREE.Vector3());
-    const orientation = viewCamera.getWorldQuaternion(new THREE.Quaternion());
-    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(orientation);
-    this.position.copy(position).addScaledVector(
-      forward,
+    cameraWorldCenter(camera, this.cameraPosition, this.eyePosition);
+    viewCamera.getWorldQuaternion(this.cameraOrientation);
+    this.cameraForward.set(0, 0, -1).applyQuaternion(this.cameraOrientation);
+    this.position.copy(this.cameraPosition).addScaledVector(
+      this.cameraForward,
       Math.min(3, Math.max(0.5, Number(distance) || 1.2)),
     );
-    this.quaternion.copy(orientation);
+    this.quaternion.copy(this.cameraOrientation);
   }
 
   dispose() {

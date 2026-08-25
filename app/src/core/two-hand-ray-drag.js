@@ -179,6 +179,9 @@ function assertInitialAnchorMapping(hand, targetPosition, targetQuaternion, targ
 
 /**
  * Captures an absolute, renderer-independent two-hand ray drag relation.
+ *
+ * When `lockPose` is true the solved pose keeps the captured position and
+ * orientation; only the scale factor is applied (locked panels).
  */
 export function createTwoHandRayDragState({
   first,
@@ -187,6 +190,7 @@ export function createTwoHandRayDragState({
   targetQuaternion,
   targetScale,
   scaleLimits,
+  lockPose = false,
 } = {}) {
   const initialFirst = parseHand(first, "First");
   const initialSecond = parseHand(second, "Second");
@@ -215,6 +219,7 @@ export function createTwoHandRayDragState({
     targetQuaternion: rotation,
     targetScale: scale,
     scaleLimits: limits,
+    lockPose: Boolean(lockPose),
     targetNormal,
     initialSeparation: vectorLength(subtract(initialSecond.endpoint, initialFirst.endpoint)),
     initialFrame,
@@ -253,14 +258,18 @@ export function solveTwoHandRayDragPose(state, { first, second } = {}) {
   const targetScale = scaledAnchor({ x: 1, y: 1, z: 1 }, state.targetScale, scaleFactor);
   const anchorMidpoint = midpoint(initialFirst.localAnchor, initialSecond.localAnchor);
   const midpointValue = midpoint(firstEndpoint, secondEndpoint);
-  const position = subtract(
-    midpointValue,
-    rotateVector(scaledAnchor(anchorMidpoint, state.targetScale, scaleFactor), quaternion),
-  );
+  // Locked panels keep their captured position and orientation; only the
+  // scale factor from the pinch spread is applied.
+  const position = state.lockPose
+    ? { ...state.targetPosition }
+    : subtract(
+      midpointValue,
+      rotateVector(scaledAnchor(anchorMidpoint, state.targetScale, scaleFactor), quaternion),
+    );
 
   return {
     position,
-    quaternion,
+    quaternion: state.lockPose ? { ...state.targetQuaternion } : quaternion,
     targetScale,
     scaleFactor,
     firstEndpoint,

@@ -5,18 +5,24 @@ import {
   createTwoHandRayDragState,
   solveTwoHandRayDragPose,
 } from "../core/two-hand-ray-drag.js";
+import { INTERACTION_LAYER } from "./canvas-ui.js";
 
 /**
  * Updates an XR raycaster and returns a snapshot that remains valid after the
  * raycaster is next used for another controller.
  */
 export function snapshotXrControllerRay(raycaster, controller) {
-  if (!controller) return null;
-  raycaster.setFromXRController(controller);
+  if (!setXrControllerRay(raycaster, controller)) return null;
   return {
     rayOrigin: raycaster.ray.origin.clone(),
     rayDirection: raycaster.ray.direction.clone(),
   };
+}
+
+function setXrControllerRay(raycaster, controller) {
+  if (!controller) return false;
+  raycaster.setFromXRController(controller);
+  return true;
 }
 
 export class InteractionController {
@@ -29,10 +35,14 @@ export class InteractionController {
     this.onGesture = onGesture;
     this.onFocus = onFocus;
     this.raycaster = new THREE.Raycaster();
+    // Only meshes that opt into the shared interaction layer run geometry
+    // raycasts; recursive traversal can then safely include the whole scene.
+    this.raycaster.layers.set(INTERACTION_LAYER);
     this.pointer = new THREE.Vector2();
     this.desktopDrag = null;
     this.xrGrabs = new Map();
     this.xrControllers = [];
+    this.xrControllerPoses = [];
     this.xrHands = [];
     this.xrRays = [];
     this.xrListeners = [];
@@ -40,6 +50,12 @@ export class InteractionController {
     this.lastFocusedTarget = null;
     this.hoveredDrawTarget = null;
     this.nextGestureId = 1;
+    this.scratchQuaternion = new THREE.Quaternion();
+    this.scratchParentQuaternion = new THREE.Quaternion();
+    this.scratchEuler = new THREE.Euler();
+    this.scratchPosition = new THREE.Vector3();
+    this.scratchMovement = new THREE.Vector3();
+    this.scratchScale = new THREE.Vector3();
     this.#bindDesktop();
     this.#bindXr();
   }
@@ -158,6 +174,10 @@ export class InteractionController {
       controller.addEventListener("selectend", onSelectEnd);
       this.scene.add(controller);
       this.xrControllers.push(controller);
+      this.xrControllerPoses.push({
+        position: new THREE.Vector3(),
+        quaternion: new THREE.Quaternion(),
+      });
       this.xrRays.push(ray);
       this.xrListeners.push({ controller, onSelectStart, onSelectEnd });
 
@@ -196,10 +216,7 @@ export class InteractionController {
       return;
     }
     this.#focus(target);
-    const position = new THREE.Vector3();
-    const quaternion = new THREE.Quaternion();
-    controller.getWorldPosition(position);
-    controller.getWorldQuaternion(quaternion);
+    const { position, quaternion } = this.#sampleControllerPose(index);
     const rayDrag = this.#canRayDrag(target, root)
       ? this.#captureRayDrag(hit, root, quaternion, ray)
       : null;
@@ -225,18 +242,18 @@ export class InteractionController {
       this.xrGrabs.delete(index);
       return;
     }
-    const position = new THREE.Vector3();
-    const quaternion = new THREE.Quaternion();
     const controller = this.xrControllers[index];
     if (!controller) {
       this.xrGrabs.delete(index);
       return;
     }
-    controller.getWorldPosition(position);
-    controller.getWorldQuaternion(quaternion);
+    const { position, quaternion } = this.#sampleControllerPose(index);
     const moved = grab.startPosition.distanceTo(position) > 0.015
       || 1 - Math.abs(grab.startQuaternion.dot(quaternion)) > 0.0001;
-    if (!moved && !grab.gestureConsumed) this.onActivate?.(grab.hit);
+    const lockedPanelPinch = typeof grab.target === "string"
+      && grab.root?.userData?.panelId === grab.target
+      && grab.root?.userData?.locked;
+    if (lockedPanelPinch || (!moved && !grab.gestureConsumed)) this.onActivate?.(grab.hit);
     this.xrGrabs.delete(index);
     if (this.xrGrabs.size === 1) {
       this.#rebaseRemainingRayGrab();
@@ -248,7 +265,7 @@ export class InteractionController {
     if (this.xrGrabs.size === 0) {
       let hovered = false;
       for (const controller of this.xrControllers) {
-        if (!snapshotXrControllerRay(this.raycaster, controller)) continue;
+        if (!setXrControllerRay(this.raycaster, controller)) continue;
         const hit = this.#firstInteractiveHit();
         if (this.#drawTarget(hit)) {
           this.#updateDrawHover(hit);
@@ -264,12 +281,18 @@ export class InteractionController {
       if (!hovered) this.#updateDrawHover(null);
       return;
     }
-    const grabs = [...this.xrGrabs.entries()];
-    const drawingGrabs = grabs.filter(([, grab]) => grab.drawing);
-    if (drawingGrabs.length) {
+    let hasDrawingGrab = false;
+    for (const grab of this.xrGrabs.values()) {
+      if (grab.drawing) {
+        hasDrawingGrab = true;
+        break;
+      }
+    }
+    if (hasDrawingGrab) {
       let hovered = false;
-      for (const [index, grab] of drawingGrabs) {
-        if (!snapshotXrControllerRay(this.raycaster, this.xrControllers[index])) continue;
+      for (const [index, grab] of this.xrGrabs) {
+        if (!grab.drawing
+          || !setXrControllerRay(this.raycaster, this.xrControllers[index])) continue;
         const hit = this.#firstInteractiveHit();
         if (this.#drawTarget(hit) === grab.drawTarget) {
           grab.lastHit = hit;
@@ -282,26 +305,22 @@ export class InteractionController {
       return;
     }
     this.#updateDrawHover(null);
-    if (grabs.length === 1) {
-      const [index, grab] = grabs[0];
+    if (this.xrGrabs.size === 1) {
+      const [index, grab] = this.xrGrabs.entries().next().value;
       if (grab.suspended) return;
-      const position = new THREE.Vector3();
-      const quaternion = new THREE.Quaternion();
       const controller = this.xrControllers[index];
       if (!controller) return;
-      controller.getWorldPosition(position);
-      controller.getWorldQuaternion(quaternion);
+      const { position, quaternion } = this.#sampleControllerPose(index);
       if (grab.rayDrag) {
         const unchanged = grab.startPosition.distanceTo(position) <= 1e-8
           && 1 - Math.abs(grab.startQuaternion.dot(quaternion)) <= 1e-12;
         grab.lastPosition.copy(position);
         grab.lastQuaternion.copy(quaternion);
         if (unchanged) return;
-        const ray = snapshotXrControllerRay(this.raycaster, controller);
-        if (!ray) return;
+        if (!setXrControllerRay(this.raycaster, controller)) return;
         const pose = solveRayDragPose(grab.rayDrag, {
-          rayOrigin: ray.rayOrigin,
-          rayDirection: ray.rayDirection,
+          rayOrigin: this.raycaster.ray.origin,
+          rayDirection: this.raycaster.ray.direction,
           controllerQuaternion: quaternion,
         });
         this.onGesture?.(grab.target, {
@@ -310,12 +329,13 @@ export class InteractionController {
         });
         return;
       }
-      const movement = position.clone().sub(grab.lastPosition);
+      const movement = this.scratchMovement.copy(position).sub(grab.lastPosition);
       grab.lastPosition.copy(position);
-      const rotationDelta = quaternion
-        .clone()
-        .multiply(grab.lastQuaternion.clone().invert());
-      const rotation = new THREE.Euler().setFromQuaternion(rotationDelta);
+      const rotationDelta = this.scratchQuaternion
+        .copy(grab.lastQuaternion)
+        .invert()
+        .premultiply(quaternion);
+      const rotation = this.scratchEuler.setFromQuaternion(rotationDelta, "XYZ");
       grab.lastQuaternion.copy(quaternion);
       this.onGesture?.(grab.target, {
         hands: 1,
@@ -324,7 +344,9 @@ export class InteractionController {
       });
       return;
     }
-    const [[leftIndex, left], [rightIndex, right]] = grabs;
+    const grabEntries = this.xrGrabs.entries();
+    const [leftIndex, left] = grabEntries.next().value;
+    const [rightIndex, right] = grabEntries.next().value;
     if (left.target !== right.target || left.root !== right.root) return;
     if (left.twoHand?.state && left.twoHand === right.twoHand) {
       const pose = this.#solveTwoHandGesture(left.twoHand.state, leftIndex, rightIndex);
@@ -354,13 +376,11 @@ export class InteractionController {
     // A movable root only accepts an initialized absolute pair. Falling back to
     // incremental scaling here would make a failed capture jump unpredictably.
     if (this.#canRayDrag(left.target, left.root)) return;
-    const leftPosition = new THREE.Vector3();
-    const rightPosition = new THREE.Vector3();
     const leftController = this.xrControllers[leftIndex];
     const rightController = this.xrControllers[rightIndex];
     if (!leftController || !rightController) return;
-    leftController.getWorldPosition(leftPosition);
-    rightController.getWorldPosition(rightPosition);
+    const leftPosition = this.#sampleControllerPose(leftIndex).position;
+    const rightPosition = this.#sampleControllerPose(rightIndex).position;
     const previous = left.lastPosition.distanceTo(right.lastPosition);
     const current = leftPosition.distanceTo(rightPosition);
     left.lastPosition.copy(leftPosition);
@@ -429,10 +449,16 @@ export class InteractionController {
     const manipulation = root?.userData.manipulation;
     if (!manipulation || !target) return false;
     if (manipulation.type === "browser") return true;
+    if (manipulation.type === "toolbar") return true;
     if (manipulation.type !== "panel" || typeof target !== "string"
       || root.userData.panelId !== target || root.userData.maskEditing) return false;
     return Boolean(root.userData.minimized)
-      || (!root.userData.locked && !root.userData.zoomMode);
+      || !root.userData.locked;
+  }
+
+  setRayVisible(visible) {
+    const show = Boolean(visible);
+    for (const ray of this.xrRays) ray.visible = show;
   }
 
   #captureRayDrag(hit, root, controllerQuaternion, ray, localAnchor) {
@@ -499,6 +525,14 @@ export class InteractionController {
     return hit;
   }
 
+  #sampleControllerPose(index) {
+    const controller = this.xrControllers[index];
+    const pose = this.xrControllerPoses[index];
+    controller.getWorldPosition(pose.position);
+    controller.getWorldQuaternion(pose.quaternion);
+    return pose;
+  }
+
   #captureTwoHandState(root, firstHit, secondHit) {
     root.updateWorldMatrix(true, false);
     const position = new THREE.Vector3();
@@ -528,7 +562,7 @@ export class InteractionController {
 
   #twoHandScaleLimits(manipulation, targetScale) {
     const limits = manipulation.scaleLimits ?? { min: 1, max: 1 };
-    if (manipulation.type !== "browser") return limits;
+    if (manipulation.type !== "browser" && manipulation.type !== "toolbar") return limits;
     const current = Math.abs(targetScale.x);
     if (!Number.isFinite(current) || current <= Number.EPSILON) return limits;
     return {
@@ -567,10 +601,7 @@ export class InteractionController {
       grab.suspended = true;
       return;
     }
-    const position = new THREE.Vector3();
-    const quaternion = new THREE.Quaternion();
-    controller.getWorldPosition(position);
-    controller.getWorldQuaternion(quaternion);
+    const { position, quaternion } = this.#sampleControllerPose(index);
     const hit = {
       point: ray.rayOrigin.clone().addScaledVector(ray.rayDirection, hand.distance),
     };
@@ -592,8 +623,12 @@ export class InteractionController {
   }
 
   #worldPoseToParentLocal(root, pose) {
-    const position = new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z);
-    const quaternion = new THREE.Quaternion(
+    const position = this.scratchPosition.set(
+      pose.position.x,
+      pose.position.y,
+      pose.position.z,
+    );
+    const quaternion = this.scratchQuaternion.set(
       pose.quaternion.x,
       pose.quaternion.y,
       pose.quaternion.z,
@@ -603,11 +638,14 @@ export class InteractionController {
     if (parent) {
       parent.updateWorldMatrix(true, false);
       parent.worldToLocal(position);
-      const parentQuaternion = new THREE.Quaternion();
+      const parentQuaternion = this.scratchParentQuaternion;
       parent.getWorldQuaternion(parentQuaternion);
       quaternion.premultiply(parentQuaternion.invert()).normalize();
     }
-    const rotation = new THREE.Euler().setFromQuaternion(quaternion, root?.rotation.order);
+    const rotation = this.scratchEuler.setFromQuaternion(
+      quaternion,
+      root?.rotation.order ?? "XYZ",
+    );
     return {
       position: { x: position.x, y: position.y, z: position.z },
       rotation: { x: rotation.x, y: rotation.y, z: rotation.z },
@@ -619,7 +657,7 @@ export class InteractionController {
     const parent = root?.parent;
     if (!parent) return value;
     parent.updateWorldMatrix(true, false);
-    const parentScale = new THREE.Vector3();
+    const parentScale = this.scratchScale;
     parent.getWorldScale(parentScale);
     const divisor = Math.abs(parentScale.x);
     return Number.isFinite(divisor) && divisor > Number.EPSILON ? value / divisor : value;
@@ -653,6 +691,7 @@ export class InteractionController {
     this.xrListeners = [];
     this.xrRays = [];
     this.xrControllers = [];
+    this.xrControllerPoses = [];
     this.xrHands = [];
     this.xrGrabs.clear();
   }

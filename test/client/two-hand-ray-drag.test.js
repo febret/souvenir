@@ -159,6 +159,33 @@ describe("two-hand ray dragging", () => {
     expect(clamped.scaleFactor).toBe(1.5);
   });
 
+  it("keeps the captured pose and applies only scale when lockPose is set", () => {
+    const position = { x: 1, y: -2, z: -4 };
+    const quaternion = { x: 0, y: 0, z: Math.SQRT1_2, w: Math.SQRT1_2 };
+    const firstAnchor = { x: -0.5, y: 0.2, z: 0 };
+    const secondAnchor = { x: 0.5, y: -0.2, z: 0 };
+    const firstEndpoint = worldAnchor(position, quaternion, { x: 1, y: 1, z: 1 }, firstAnchor);
+    const secondEndpoint = worldAnchor(position, quaternion, { x: 1, y: 1, z: 1 }, secondAnchor);
+    const state = createTwoHandRayDragState({
+      first: hand(firstEndpoint, firstAnchor),
+      second: hand(secondEndpoint, secondAnchor),
+      targetPosition: position,
+      targetQuaternion: quaternion,
+      targetScale: { x: 1, y: 1, z: 1 },
+      scaleLimits: { min: 0.5, max: 3 },
+      lockPose: true,
+    });
+    const pose = solveTwoHandRayDragPose(state, {
+      first: { rayOrigin: add(firstEndpoint, { x: 0, y: 0, z: 3 }), rayDirection: { x: 0, y: 0, z: -1 } },
+      second: { rayOrigin: add(secondEndpoint, { x: 0, y: 0, z: 3 }), rayDirection: { x: 0, y: 0, z: -1 } },
+    });
+
+    expect(pose.position).toEqual(position);
+    expectVectorClose({ x: pose.quaternion.x, y: 0, z: pose.quaternion.z, w: pose.quaternion.w }, { x: 0, y: 0, z: quaternion.z, w: quaternion.w });
+    expect(pose.scaleFactor).toBe(1);
+    expect(pose.targetScale).toEqual({ x: 1, y: 1, z: 1 });
+  });
+
   it("retains nonuniform initial target scale while scaling uniformly", () => {
     const state = centeredState({
       targetScale: { x: 2, y: 3, z: 4 },

@@ -151,7 +151,7 @@ def test_commentary_tags_share_definitions_without_media_path_collisions(roots: 
         assert restarted.get("/api/commentary-tags", params={"path": "same.webm"}).json()["tag_ids"] == []
 
 
-def test_v1_tags_migrate_to_v4_and_malformed_v4_is_rejected(roots: tuple[Path, Path]):
+def test_v1_tags_migrate_to_v5_and_malformed_v5_is_rejected(roots: tuple[Path, Path]):
     media, commentary = roots
     (media / "clip.mp4").write_bytes(b"video")
     tag_id = "a" * 32
@@ -167,15 +167,17 @@ def test_v1_tags_migrate_to_v4_and_malformed_v4_is_rejected(roots: tuple[Path, P
         assert client.patch(f"/api/tags/{tag_id}", json={"name": "Migrated"}).status_code == 200
 
     stored = json.loads(tag_file.read_text())
-    assert stored["version"] == 4
+    assert stored["version"] == 5
     assert stored["media_assignments"] == {"clip.mp4": [tag_id]}
     assert stored["commentary_assignments"] == {}
     assert stored["commentary_captions"] == {}
     assert stored["commentary_volumes"] == {}
+    assert stored["media_adm_settings"] == {}
     tag_file.write_text(json.dumps({
-        "version": 4, "updated_at": None, "tags": [],
+        "version": 5, "updated_at": None, "tags": [],
         "media_assignments": {"../bad": []}, "commentary_assignments": {},
         "commentary_captions": {}, "commentary_volumes": {},
+        "media_adm_settings": {},
     }))
     assert TestClient(create_app(media, commentary_home=commentary)).get("/api/tags").status_code == 500
 
@@ -244,7 +246,7 @@ def test_commentary_captions_are_validated_persisted_and_listed(roots: tuple[Pat
         assert client.put(
             "/api/commentary-volume",
             params={"path": "clip.mp3"},
-            json={"volume": 2.1},
+            json={"volume": 4.1},
         ).status_code == 422
         assert client.put(
             "/api/commentary-volume",
@@ -295,10 +297,11 @@ def test_v2_tags_migrate_without_losing_assignments(roots: tuple[Path, Path]):
         ).status_code == 200
 
     stored = json.loads(tag_file.read_text())
-    assert stored["version"] == 4
+    assert stored["version"] == 5
     assert stored["commentary_assignments"] == {"clip.mp3": [tag_id]}
     assert stored["commentary_captions"] == {"clip.mp3": "Migrated"}
     assert stored["commentary_volumes"] == {}
+    assert stored["media_adm_settings"] == {}
 
 
 def test_v3_caption_storage_migrates_without_losing_captions(roots: tuple[Path, Path]):
@@ -321,9 +324,10 @@ def test_v3_caption_storage_migrates_without_losing_captions(roots: tuple[Path, 
         ).status_code == 200
 
     stored = json.loads(tag_file.read_text())
-    assert stored["version"] == 4
+    assert stored["version"] == 5
     assert stored["commentary_captions"] == {"clip.mp3": "Keep this caption"}
     assert stored["commentary_volumes"] == {"clip.mp3": 0.6}
+    assert stored["media_adm_settings"] == {}
 
 
 def test_commentary_assignments_remain_atomic_under_concurrent_updates(client: TestClient, roots: tuple[Path, Path]):
