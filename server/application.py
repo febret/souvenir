@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from .auto_depth import AutoDepthGenerator
 from .auto_mask import AutoMaskGenerator
-from .config import commentary_dir, library_id, load_settings
+from .config import commentary_dir, library_id, load_settings, upload_dirname
 from .library import LibraryScanService, LibraryScanner
 from .routes import add_routes
 
@@ -44,6 +44,7 @@ def create_app(
     *,
     library_scanner: LibraryScanner | None = None,
     commentary_home: str | Path | None = None,
+    upload_dirname_override: str | None = None,
     auto_mask_generator: AutoMaskGenerator | None = None,
     auto_depth_generator: AutoDepthGenerator | None = None,
 ) -> FastAPI:
@@ -56,6 +57,12 @@ def create_app(
         if commentary_home is not None
         else (settings.commentary_dir if settings is not None else commentary_dir())
     )
+    upload_subdir = (
+        upload_dirname_override
+        if upload_dirname_override is not None
+        else (settings.upload_dirname if settings is not None else upload_dirname())
+    )
+    upload_root = root / upload_subdir
     if commentary_root is not None and not commentary_root.is_dir():
         raise ValueError(f"commentary_home must be an existing directory: {commentary_root}")
     library_scan = LibraryScanService(root, library_scanner) if library_scanner else LibraryScanService(root)
@@ -76,12 +83,15 @@ def create_app(
     app = FastAPI(title="Souvenir", version="1.0.0", lifespan=lifespan)
     app.state.media_home = root
     app.state.commentary_home = commentary_root
+    app.state.upload_home = upload_root
+    app.state.upload_dirname = upload_subdir
     app.state.library_id = library_id(root)
     app.state.library_scan = library_scan
     add_routes(
         app,
         root,
         commentary_root,
+        upload_root=upload_root,
         auto_mask_generator=auto_mask_generator,
         auto_depth_generator=auto_depth_generator,
     )

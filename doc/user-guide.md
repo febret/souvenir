@@ -178,6 +178,8 @@ instead of one browser.
 
 The title bar offers three ways to open Souvenir:
 
+- **Upload images** imports one or more local image files into
+  `<SOUVENIR_MEDIA_HOME>/<SOUVENIR_UPLOAD_DIRNAME>` (`uploads` by default).
 - **Browse mode** opens a conventional desktop media browser.
 - **Desktop preview** runs the spatial gallery scene with mouse input.
 - **Enter passthrough** requests immersive AR and the browser's passthrough and
@@ -367,14 +369,20 @@ instead of saving it to the wrong file.
 Auto Mask is available for pictures only, but applied masks work with both
 pictures and videos. To reduce GPU memory and processing time, the server runs
 segmentation on an aspect-preserving copy no larger than 512 pixels on either
-axis, restores the generated mask to the source picture dimensions, and then
-softens its edges. The server stores normalized
-mask PNGs and blur metadata under
+axis and whose width and height are multiples of 32, restores the generated mask
+to the source picture dimensions, stores a binary mask, and stores a blurred
+version generated from that binary mask using the saved blur value. The client
+uses the blurred mask for display and the binary mask while editing. The server
+stores normalized mask PNGs and blur metadata under
 `<media home>/.souvenir-masks/`. This internal folder is not exposed in the
 gallery. Include it when backing up the media home if you want to preserve
 masks. Once saved, a mask is loaded automatically whenever that media appears
 in any existing or new panel. New panels apply masks by default; use **Mask** to
 turn one off locally without deleting the shared server mask.
+
+For generated image depth data, open panel **Options** and choose
+**Delete depth** in the depth section to remove the saved depth map and turn off
+3D mode for that media.
 
 ## 6. Browse media
 

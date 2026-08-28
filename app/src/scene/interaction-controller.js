@@ -26,10 +26,11 @@ function setXrControllerRay(raycaster, controller) {
 }
 
 export class InteractionController {
-  constructor({ renderer, camera, scene, canvas, onActivate, onGesture, onFocus }) {
+  constructor({ renderer, camera, scene, overlayScene, canvas, onActivate, onGesture, onFocus }) {
     this.renderer = renderer;
     this.camera = camera;
     this.scene = scene;
+    this.overlayScene = overlayScene ?? null;
     this.canvas = canvas;
     this.onActivate = onActivate;
     this.onGesture = onGesture;
@@ -127,7 +128,7 @@ export class InteractionController {
       if (this.desktopDrag.drawing) {
         this.#draw(this.desktopDrag.drawTarget, "end", this.desktopDrag.lastHit);
       } else if (!this.desktopDrag.moved) {
-        this.onActivate?.(this.desktopDrag.hit);
+        this.onActivate?.(this.desktopDrag.hit, { source: "desktop-pointer" });
       }
       this.desktopDrag = null;
       if (this.canvas.hasPointerCapture(event.pointerId)) {
@@ -212,7 +213,7 @@ export class InteractionController {
     const gesture = this.#gestureTargetInfo(hit);
     const { target, root } = gesture;
     if (!target) {
-      this.onActivate?.(hit);
+      this.onActivate?.(hit, { source: "xr-select-start" });
       return;
     }
     this.#focus(target);
@@ -250,10 +251,7 @@ export class InteractionController {
     const { position, quaternion } = this.#sampleControllerPose(index);
     const moved = grab.startPosition.distanceTo(position) > 0.015
       || 1 - Math.abs(grab.startQuaternion.dot(quaternion)) > 0.0001;
-    const lockedPanelPinch = typeof grab.target === "string"
-      && grab.root?.userData?.panelId === grab.target
-      && grab.root?.userData?.locked;
-    if (lockedPanelPinch || (!moved && !grab.gestureConsumed)) this.onActivate?.(grab.hit);
+    if (!moved && !grab.gestureConsumed) this.onActivate?.(grab.hit, { source: "xr-select" });
     this.xrGrabs.delete(index);
     if (this.xrGrabs.size === 1) {
       this.#rebaseRemainingRayGrab();
@@ -395,8 +393,11 @@ export class InteractionController {
   }
 
   #firstInteractiveHit() {
+    const targets = this.overlayScene
+      ? [...this.overlayScene.children, ...this.scene.children]
+      : this.scene.children;
     return this.raycaster
-      .intersectObjects(this.scene.children, true)
+      .intersectObjects(targets, true)
       .find((hit) => {
         let current = hit.object;
         while (current) {

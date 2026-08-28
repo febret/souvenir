@@ -15,6 +15,7 @@ import server.application as application
 import server.masks as masks_module
 from server.application import create_app
 from server.auto_mask import (
+    AUTO_MASK_DEFAULT_BLUR,
     AUTO_MASK_INFERENCE_MAX_DIMENSION,
     BiRefNetAutoMaskGenerator,
     _background_mask,
@@ -59,6 +60,17 @@ def _png_bytes(
     return output.getvalue()
 
 
+def _jpeg_bytes(
+    color: tuple[int, int, int] = (255, 0, 0),
+    *,
+    size: tuple[int, int] = (12, 8),
+) -> bytes:
+    image = Image.new("RGB", size, color)
+    output = BytesIO()
+    image.save(output, format="JPEG")
+    return output.getvalue()
+
+
 class FakeAutoMaskGenerator:
     def __init__(
         self,
@@ -73,9 +85,11 @@ class FakeAutoMaskGenerator:
         self.started = started
         self.release = release
         self.calls = 0
+        self.max_dimensions: list[int] = []
 
-    def generate(self, source: Path) -> tuple[bytes, str]:
+    def generate(self, source: Path, *, max_dimension: int = 512) -> tuple[bytes, str]:
         self.calls += 1
+        self.max_dimensions.append(max_dimension)
         if self.started is not None:
             self.started.set()
         if self.release is not None:
@@ -101,10 +115,12 @@ class FakeAutoDepthGenerator:
         self.release = release
         self.calls = 0
         self.max_dimensions: list[int] = []
+        self.sources: list[Path] = []
 
     def generate(self, source: Path, *, max_dimension: int = 512) -> tuple[bytes, str]:
         self.calls += 1
         self.max_dimensions.append(max_dimension)
+        self.sources.append(source)
         if self.started is not None:
             self.started.set()
         if self.release is not None:
@@ -125,7 +141,7 @@ def test_auto_mask_generator_reports_missing_runtime_dependencies(monkeypatch: p
         generator.generate(Path("albums/photo.jpg"))
 
 
-def test_auto_mask_scales_inference_image_to_512_preserving_aspect_ratio():
+def test_auto_mask_scales_inference_image_to_max_dimension_preserving_aspect_ratio():
     landscape = _inference_image(
         Image.new("RGB", (1600, 900)),
         AUTO_MASK_INFERENCE_MAX_DIMENSION,
@@ -139,33 +155,41 @@ def test_auto_mask_scales_inference_image_to_512_preserving_aspect_ratio():
         AUTO_MASK_INFERENCE_MAX_DIMENSION,
     )
 
-    assert landscape.size == (512, 288)
-    assert portrait.size == (288, 512)
-    assert small.size == (320, 200)
+    assert landscape.width == AUTO_MASK_INFERENCE_MAX_DIMENSION
+    assert landscape.height <= AUTO_MASK_INFERENCE_MAX_DIMENSION
+    assert portrait.height == AUTO_MASK_INFERENCE_MAX_DIMENSION
+    assert portrait.width <= AUTO_MASK_INFERENCE_MAX_DIMENSION
+    assert landscape.width % 32 == 0 and landscape.height % 32 == 0
+    assert portrait.width % 32 == 0 and portrait.height % 32 == 0
+    assert small.size == (320, 192)
 
 
-def test_auto_mask_upscales_to_source_size_before_softening_edges():
+def test_auto_mask_upscales_probability_to_binary_background_mask():
     probability = Image.new("L", (512, 288), 0)
     probability.paste(255, (0, 0, 256, 288))
 
-    hard = _background_mask(
+    background = _background_mask(
         probability,
         (1600, 900),
         threshold=0.48,
-        edge_feather=0,
-    )
-    softened = _background_mask(
-        probability,
-        (1600, 900),
-        threshold=0.48,
-        edge_feather=8,
     )
 
-    assert hard.size == (1600, 900)
-    assert softened.size == (1600, 900)
-    assert softened.getpixel((790, 450)) != hard.getpixel((790, 450))
-    assert softened.getpixel((0, 450)) == 0
-    assert softened.getpixel((1599, 450)) == 255
+    assert background.size == (1600, 900)
+    assert background.getpixel((0, 450)) == 0
+    assert background.getpixel((1599, 450)) == 255
+    assert set(background.getdata()).issubset({0, 255})
+
+
+def test_auto_mask_inference_dimensions_are_divisible_by_model_patch_size():
+    image = _inference_image(
+        Image.new("RGB", (400, 300)),
+        AUTO_MASK_INFERENCE_MAX_DIMENSION,
+    )
+
+    assert image.width % 32 == 0
+    assert image.height % 32 == 0
+    assert image.width <= AUTO_MASK_INFERENCE_MAX_DIMENSION
+    assert image.height <= AUTO_MASK_INFERENCE_MAX_DIMENSION
 
 
 def test_generated_mask_storage_preserves_source_dimensions_above_manual_limit(library: Path):
@@ -338,6 +362,69 @@ def test_image_and_video_thumbnails_are_cached(client: TestClient, library: Path
     assert client.get("/api/thumbnail", params={"path": "albums/photo.jpg"}).content == image.content
 
 
+def test_upload_images_writes_to_default_uploads_directory(client: TestClient, library: Path):
+    response = client.post(
+        "/api/uploads",
+        files=[("files", ("new.jpg", _jpeg_bytes(), "image/jpeg"))],
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["directory"] == "uploads"
+    assert [entry["path"] for entry in body["entries"]] == ["uploads/new.jpg"]
+    assert (library / "uploads" / "new.jpg").is_file()
+    listing = client.get("/api/media", params={"path": "uploads"})
+    assert listing.status_code == 200
+    assert any(entry["path"] == "uploads/new.jpg" for entry in listing.json()["files"])
+
+
+def test_upload_images_supports_multi_file_submission(client: TestClient):
+    response = client.post(
+        "/api/uploads",
+        files=[
+            ("files", ("first.jpg", _jpeg_bytes((255, 0, 0)), "image/jpeg")),
+            ("files", ("second.png", _png_bytes((0, 0, 255, 255)), "image/png")),
+        ],
+    )
+
+    assert response.status_code == 201
+    paths = [entry["path"] for entry in response.json()["entries"]]
+    assert paths == ["uploads/first.jpg", "uploads/second.png"]
+
+
+def test_upload_images_auto_renames_name_collisions(client: TestClient, library: Path):
+    uploads = library / "uploads"
+    uploads.mkdir()
+    (uploads / "photo.jpg").write_bytes(_jpeg_bytes((12, 34, 56)))
+
+    response = client.post(
+        "/api/uploads",
+        files=[("files", ("photo.jpg", _jpeg_bytes((1, 2, 3)), "image/jpeg"))],
+    )
+
+    assert response.status_code == 201
+    assert response.json()["entries"][0]["path"] == "uploads/photo (2).jpg"
+    assert (uploads / "photo (2).jpg").is_file()
+
+
+def test_upload_images_reject_non_images(client: TestClient):
+    response = client.post(
+        "/api/uploads",
+        files=[("files", ("notes.txt", b"not-an-image", "text/plain"))],
+    )
+    assert response.status_code == 415
+    assert response.json()["detail"] == "upload content type must be image/*"
+
+
+def test_upload_images_reject_invalid_image_payload(client: TestClient):
+    response = client.post(
+        "/api/uploads",
+        files=[("files", ("fake.jpg", b"definitely-not-a-jpeg", "image/jpeg"))],
+    )
+    assert response.status_code == 415
+    assert response.json()["detail"] == "unsupported uploaded image format"
+
+
 def test_static_spa_fallback_when_client_is_present(tmp_path: Path, monkeypatch):
     package = tmp_path / "server"
     package.mkdir()
@@ -364,10 +451,15 @@ def test_mask_info_is_absent_and_mask_get_is_not_found(client: TestClient):
         "url": None,
     }
     assert client.get("/api/mask", params={"path": "albums/photo.jpg"}).status_code == 404
+    assert client.get("/api/mask", params={"path": "albums/photo.jpg", "variant": "binary"}).status_code == 404
 
 
 def test_mask_save_get_and_restart_persistence(library: Path):
-    payload = _png_bytes()
+    source = Image.new("RGBA", (12, 8), (255, 255, 255, 0))
+    source.paste((255, 255, 255, 255), (0, 0, 6, 8))
+    output = BytesIO()
+    source.save(output, format="PNG")
+    payload = output.getvalue()
     with TestClient(create_app(library)) as client:
         saved = client.put(
             "/api/mask",
@@ -384,18 +476,28 @@ def test_mask_save_get_and_restart_persistence(library: Path):
         assert body["url"] == "/api/mask?path=albums/photo.jpg"
 
         fetched = client.get("/api/mask", params={"path": "albums/photo.jpg"})
+        fetched_binary = client.get("/api/mask", params={"path": "albums/photo.jpg", "variant": "binary"})
         assert fetched.status_code == 200
+        assert fetched_binary.status_code == 200
         assert fetched.headers["content-type"].startswith("image/png")
         assert fetched.headers["cache-control"] == "no-store"
+        assert fetched_binary.headers["cache-control"] == "no-store"
         with Image.open(BytesIO(fetched.content)) as mask:
             assert mask.mode == "RGBA"
             assert mask.size == (12, 8)
+            alpha = set(mask.getchannel("A").getdata())
+            assert any(0 < value < 255 for value in alpha)
+        with Image.open(BytesIO(fetched_binary.content)) as mask_binary:
+            assert mask_binary.mode == "RGBA"
+            assert mask_binary.size == (12, 8)
+            assert set(mask_binary.getchannel("A").getdata()).issubset({0, 255})
 
     with TestClient(create_app(library)) as restarted:
         info = restarted.get("/api/mask-info", params={"path": "albums/photo.jpg"})
         assert info.status_code == 200
         assert info.json() == body
         assert restarted.get("/api/mask", params={"path": "albums/photo.jpg"}).content == fetched.content
+        assert restarted.get("/api/mask", params={"path": "albums/photo.jpg", "variant": "binary"}).content == fetched_binary.content
 
 
 def test_mask_overwrite_and_delete_are_idempotent(client: TestClient):
@@ -417,7 +519,9 @@ def test_mask_overwrite_and_delete_are_idempotent(client: TestClient):
     assert saved.json()["blur"] == 64
 
     with Image.open(BytesIO(client.get("/api/mask", params={"path": "albums/photo.jpg"}).content)) as mask:
-        assert mask.convert("RGBA").getpixel((0, 0)) == (0, 0, 255, 255)
+        assert mask.convert("RGBA").getchannel("A").getpixel((0, 0)) == 255
+    with Image.open(BytesIO(client.get("/api/mask", params={"path": "albums/photo.jpg", "variant": "binary"}).content)) as mask:
+        assert mask.convert("RGBA").getchannel("A").getpixel((0, 0)) == 255
 
     deleted = client.delete("/api/mask", params={"path": "albums/photo.jpg"})
     assert deleted.status_code == 200
@@ -517,8 +621,29 @@ def test_auto_mask_queue_status_completion_and_device_reporting(library: Path):
         assert status["status"] == "completed"
         assert status["device"] == "cuda"
         assert status["mask"]["exists"] is True
+        assert status["mask"]["blur"] == AUTO_MASK_DEFAULT_BLUR
         assert generator.calls == 1
+        assert generator.max_dimensions == [512]
         assert client.get("/api/mask", params={"path": "albums/photo.jpg"}).status_code == 200
+
+
+def test_auto_mask_accepts_explicit_higher_resolution_requests(library: Path):
+    generator = FakeAutoMaskGenerator(
+        payload=_png_bytes((255, 255, 255, 255), size=(20, 10)),
+        device="cuda",
+    )
+    with TestClient(create_app(library, auto_mask_generator=generator)) as client:
+        started = client.post(
+            "/api/mask/auto",
+            params={"path": "albums/photo.jpg", "max_resolution": 1024},
+        )
+        assert started.status_code == 200
+        for _ in range(40):
+            status = client.get("/api/mask/auto", params={"path": "albums/photo.jpg"}).json()
+            if status["status"] == "completed":
+                break
+            time.sleep(0.05)
+        assert generator.max_dimensions == [1024]
 
 
 def test_auto_mask_cancel_is_shared_for_same_image_path(library: Path):
@@ -603,7 +728,7 @@ def test_auto_depth_queue_status_completion_and_device_reporting(library: Path):
         assert client.get("/api/depth", params={"path": "albums/photo.jpg"}).status_code == 200
 
 
-def test_adm_generation_requests_only_missing_artifacts(library: Path):
+def test_adm_generation_requests_only_missing_depth_artifacts(library: Path):
     mask_generator = FakeAutoMaskGenerator(
         payload=_png_bytes((255, 255, 255, 255), size=(20, 10)),
     )
@@ -615,12 +740,6 @@ def test_adm_generation_requests_only_missing_artifacts(library: Path):
             auto_depth_generator=depth_generator,
         )
     ) as client:
-        client.put(
-            "/api/mask",
-            params={"path": "albums/photo.jpg"},
-            content=_png_bytes(),
-            headers={"Content-Type": "image/png"},
-        )
         start = client.post("/api/adm/auto", params={"path": "albums/photo.jpg"})
         assert start.status_code == 200
         status = None
@@ -631,8 +750,11 @@ def test_adm_generation_requests_only_missing_artifacts(library: Path):
             time.sleep(0.05)
         assert status is not None
         assert status["status"] == "completed"
+        assert status["mask"]["status"] == "idle"
+        assert status["mask"]["mask"]["exists"] is False
         assert mask_generator.calls == 0
         assert depth_generator.calls == 1
+        assert depth_generator.sources == [library / "albums" / "photo.jpg"]
 
 
 def test_media_adm_settings_persist_and_appear_in_listing(client: TestClient):
@@ -647,18 +769,29 @@ def test_media_adm_settings_persist_and_appear_in_listing(client: TestClient):
         "configured": True,
         "enabled": True,
         "depth_intensity": 0.8,
+        "soft_depth_enabled": False,
+        "soft_depth_blur": 12.0,
+        "fade_depth_enabled": False,
+        "fade_depth_start": 0.5,
+        "focus_blur_enabled": False,
+        "focus_position": "middle",
+        "focus_strength": "middle",
+        "light_fx_enabled": False,
+        "light_direction": "front",
+        "light_color": "white",
+        "ambient_color": "white",
+        "ambient_intensity": 0.5,
     }
     loaded = client.get("/api/media-adm", params={"path": "albums/photo.jpg"})
     assert loaded.status_code == 200
     assert loaded.json()["enabled"] is True
     listing = client.get("/api/media", params={"path": "albums"}).json()
     photo = next(entry for entry in listing["files"] if entry["path"] == "albums/photo.jpg")
-    assert photo["adm"] == {
-        "configured": True,
-        "enabled": True,
-        "depth_intensity": 0.8,
-    }
-
+    assert photo["adm"]["configured"] is True
+    assert photo["adm"]["enabled"] is True
+    assert photo["adm"]["depth_intensity"] == 0.8
+    assert photo["adm"]["light_fx_enabled"] is False
+    assert photo["adm"]["light_direction"] == "front"
 
 def test_adm_generation_passes_requested_depth_resolution(library: Path):
     mask_generator = FakeAutoMaskGenerator(payload=_png_bytes((255, 255, 255, 255)))
@@ -680,7 +813,25 @@ def test_adm_generation_passes_requested_depth_resolution(library: Path):
             if status["status"] == "completed":
                 break
             time.sleep(0.05)
+        assert mask_generator.max_dimensions == []
         assert depth_generator.max_dimensions == [192]
+
+
+def test_auto_depth_accepts_explicit_higher_resolution_requests(library: Path):
+    generator = FakeAutoDepthGenerator(payload=_png_bytes(mode="L"))
+    with TestClient(create_app(library, auto_depth_generator=generator)) as client:
+        response = client.post(
+            "/api/depth/auto",
+            params={"path": "albums/photo.jpg", "max_resolution": 1024},
+        )
+
+        assert response.status_code == 200
+        for _ in range(40):
+            status = client.get("/api/depth/auto", params={"path": "albums/photo.jpg"}).json()
+            if status["status"] == "completed":
+                break
+            time.sleep(0.05)
+        assert generator.max_dimensions == [1024]
 
 
 def test_mask_writes_remain_consistent_during_concurrent_requests(client: TestClient, library: Path):

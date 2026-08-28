@@ -21,6 +21,16 @@
         </div>
         <span id="connection-status" class="status-pill" role="status">Preparing library</span>
         <div class="launch-actions" aria-label="Open Souvenir">
+          <button id="upload-button" class="secondary-button" type="button" disabled>
+            Upload images
+          </button>
+          <input
+            id="upload-input"
+            class="visually-hidden"
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            multiple
+          />
           <button id="browse-button" class="secondary-button" type="button" disabled>
             Browse mode
           </button>
@@ -151,8 +161,8 @@
 
           <label class="range-row" for="adm-max-resolution">
             <span>
-              <strong>3D depth resolution</strong>
-              <small>Maximum long edge used for depth generation and mesh detail.</small>
+              <strong>Background generation resolution</strong>
+              <small>Long edge used for auto background mask and auto depth generation.</small>
             </span>
             <output id="adm-max-resolution-value" for="adm-max-resolution">512 px</output>
           </label>
@@ -161,10 +171,19 @@
             name="admMaxResolution"
             type="range"
             min="64"
-            max="512"
-            step="32"
+            max="2048"
+            step="1"
             value="512"
+            list="adm-max-resolution-options"
           />
+          <datalist id="adm-max-resolution-options">
+            <option value="64"></option>
+            <option value="128"></option>
+            <option value="256"></option>
+            <option value="512"></option>
+            <option value="1024"></option>
+            <option value="2048"></option>
+          </datalist>
           <section id="scenes-section" class="playback-scenes" aria-labelledby="scenes-heading">
             <div class="section-heading">
               <div>

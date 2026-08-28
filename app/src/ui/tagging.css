@@ -882,3 +882,41 @@
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* Compact 2D window styling */
+.tagging-header,
+.tagging-session-hud,
+.tagging-remaining-panel,
+.tagging-stat-card,
+.tagging-workspace,
+.tagging-media-grid,
+.tagging-exit-summary,
+.tagging-exit-summary-card {
+  padding: 4px !important;
+}
+
+.tagging-header,
+.tagging-session-hud,
+.tagging-stats,
+.tagging-exit-summary-actions {
+  gap: 4px !important;
+}
+
+.tagging-round-badge,
+.tagging-title,
+.tagging-final-score,
+.tagging-final-records {
+  margin: 0 !important;
+}
+
+.tagging-header .secondary-button,
+.tagging-header .primary-button,
+.tagging-workspace .secondary-button,
+.tagging-workspace .primary-button,
+.tagging-exit-summary-actions .secondary-button,
+.tagging-exit-summary-actions .primary-button {
+  min-height: 40px;
+  padding: 0 4px !important;
+  font-size: 1rem !important;
+  line-height: 1.05;
+}

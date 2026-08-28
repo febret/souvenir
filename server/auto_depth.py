@@ -8,19 +8,24 @@ from io import BytesIO
 from pathlib import Path
 from typing import Literal, Protocol
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from .depth_maps import DepthMapStore
 
 AutoDepthStatus = Literal["idle", "queued", "running", "completed", "failed", "cancelled"]
-MAX_AUTO_DEPTH_DIMENSION = 512
+DEFAULT_AUTO_DEPTH_DIMENSION = 512
+MAX_AUTO_DEPTH_DIMENSION = 2048
 
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _fit_within_max_dimension(width: int, height: int, max_dimension: int = MAX_AUTO_DEPTH_DIMENSION) -> tuple[int, int]:
+def _fit_within_max_dimension(
+    width: int,
+    height: int,
+    max_dimension: int = DEFAULT_AUTO_DEPTH_DIMENSION,
+) -> tuple[int, int]:
     source_width = max(1, int(width))
     source_height = max(1, int(height))
     scale = min(1.0, max_dimension / max(source_width, source_height))
@@ -30,7 +35,7 @@ def _fit_within_max_dimension(width: int, height: int, max_dimension: int = MAX_
 def _prepare_depth_input(
     image: Image.Image,
     *,
-    max_dimension: int = MAX_AUTO_DEPTH_DIMENSION,
+    max_dimension: int = DEFAULT_AUTO_DEPTH_DIMENSION,
 ) -> Image.Image:
     target_size = _fit_within_max_dimension(*image.size, max_dimension=max_dimension)
     if target_size == image.size:
@@ -49,7 +54,7 @@ def _resolve_device(requested: str) -> str:
 
 
 class AutoDepthGenerator(Protocol):
-    def generate(self, source: Path, *, max_dimension: int = MAX_AUTO_DEPTH_DIMENSION) -> tuple[bytes, str]: ...
+    def generate(self, source: Path, *, max_dimension: int = DEFAULT_AUTO_DEPTH_DIMENSION) -> tuple[bytes, str]: ...
 
     def close(self) -> None: ...
 
@@ -85,10 +90,10 @@ class DepthAnythingAutoDepthGenerator:
         if self.device == "cuda":
             self._model.half()
 
-    def generate(self, source: Path, *, max_dimension: int = MAX_AUTO_DEPTH_DIMENSION) -> tuple[bytes, str]:
+    def generate(self, source: Path, *, max_dimension: int = DEFAULT_AUTO_DEPTH_DIMENSION) -> tuple[bytes, str]:
         self._load()
         with Image.open(source) as loaded:
-            image = _prepare_depth_input(loaded.convert("RGB"), max_dimension=max_dimension)
+            image = _prepare_depth_input(ImageOps.exif_transpose(loaded).convert("RGB"), max_dimension=max_dimension)
         inputs = self._processor(images=image, return_tensors="pt", do_resize=False)
         pixel_values = inputs["pixel_values"].to(self.device)
         if self.device == "cuda":
@@ -173,7 +178,7 @@ class AutoDepthService:
             thread.join(timeout=5)
         self._generator.close()
 
-    def request(self, relative: Path, *, max_dimension: int = MAX_AUTO_DEPTH_DIMENSION) -> dict[str, object]:
+    def request(self, relative: Path, *, max_dimension: int = DEFAULT_AUTO_DEPTH_DIMENSION) -> dict[str, object]:
         path = relative.as_posix()
         resolved_max_dimension = max(64, min(MAX_AUTO_DEPTH_DIMENSION, int(max_dimension)))
         with self._condition:

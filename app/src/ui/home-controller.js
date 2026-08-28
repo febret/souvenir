@@ -1,6 +1,7 @@
 import {
   DEFAULT_SETTINGS,
   loadSettings,
+  normalizePowerOfTwoResolution,
   reconcileSelectedDirectories,
   saveSettings,
 } from "../core/settings.js";
@@ -116,6 +117,7 @@ export class HomeController {
     this.libraryFailed = false;
     this.libraryId = null;
     this.xrSupported = false;
+    this.uploadInProgress = false;
     this.libraryPollTimer = null;
     this.tags = [];
     this.tagsLoading = false;
@@ -160,6 +162,7 @@ export class HomeController {
     this.panelScrollPositions = new Map();
     this.reconcilingPanelLayout = false;
     this.focusRestoreTimer = null;
+    this.sceneNoticeTimer = null;
     this.sceneList = [];
     this.sceneUiState = createScene({ id: null, name: "New scene", loop: true });
     this.selectedSceneId = null;
@@ -225,12 +228,15 @@ export class HomeController {
       captionDistanceValue: document.querySelector("#caption-distance-value"),
       launch: document.querySelector("#launch-button"),
       preview: document.querySelector("#preview-button"),
+      upload: document.querySelector("#upload-button"),
+      uploadInput: document.querySelector("#upload-input"),
       browse: document.querySelector("#browse-button"),
       tagging: document.querySelector("#tagging-button"),
       support: document.querySelector("#xr-support"),
       error: document.querySelector("#app-error"),
       sceneShell: document.querySelector("#scene-shell"),
       sceneHud: document.querySelector(".scene-hud"),
+      sceneNotice: document.querySelector("#scene-notice"),
       canvas: document.querySelector("#scene"),
       exitPreview: document.querySelector("#exit-preview"),
       sceneControls: document.querySelector("#scene-controls"),
@@ -275,7 +281,10 @@ export class HomeController {
       this.#persist();
     });
     this.elements.admMaxResolution.addEventListener("input", () => {
-      this.settings.admMaxResolution = Number(this.elements.admMaxResolution.value);
+      this.settings.admMaxResolution = normalizePowerOfTwoResolution(
+        Number(this.elements.admMaxResolution.value),
+      );
+      this.elements.admMaxResolution.value = String(this.settings.admMaxResolution);
       this.elements.admMaxResolutionValue.textContent = `${this.settings.admMaxResolution} px`;
       this.#persist();
     });
@@ -338,6 +347,15 @@ export class HomeController {
       this.#renderDirectories();
       this.#refreshCommentarySuggestData({ refreshMedia: true });
     });
+    this.elements.upload.addEventListener("click", () => {
+      if (this.elements.upload.disabled) {
+        return;
+      }
+      this.elements.uploadInput.click();
+    });
+    this.elements.uploadInput.addEventListener("change", () => {
+      this.#uploadSelectedImages().catch((error) => this.#showError(error));
+    });
     this.elements.preview.addEventListener("click", () => this.openScene(false));
     this.elements.launch.addEventListener("click", () => this.openScene(true));
     this.elements.sceneCreateButton.addEventListener("click", () => {
@@ -396,6 +414,7 @@ export class HomeController {
     this.elements.admDefaultDepthIntensity.value = String(this.settings.admDefaultDepthIntensity);
     this.elements.admDefaultDepthIntensityValue.textContent =
       `${this.settings.admDefaultDepthIntensity.toFixed(2)}×`;
+    this.settings.admMaxResolution = normalizePowerOfTwoResolution(this.settings.admMaxResolution);
     this.elements.admMaxResolution.value = String(this.settings.admMaxResolution);
     this.elements.admMaxResolutionValue.textContent = `${this.settings.admMaxResolution} px`;
     this.elements.speedValue.textContent = `${this.elements.speed.value} sec`;
@@ -608,6 +627,31 @@ export class HomeController {
     if (this.libraryPollTimer !== null) {
       window.clearTimeout(this.libraryPollTimer);
       this.libraryPollTimer = null;
+    }
+  }
+
+  async #uploadSelectedImages() {
+    if (!this.libraryReady) {
+      this.elements.uploadInput.value = "";
+      return;
+    }
+    const files = [...(this.elements.uploadInput.files ?? [])];
+    this.elements.uploadInput.value = "";
+    if (files.length === 0) {
+      return;
+    }
+    this.uploadInProgress = true;
+    this.#updateLaunchAvailability();
+    this.#setConnectionStatus("Uploading images", "scanning");
+    try {
+      await this.api.uploadImages(files);
+      await this.#loadReadyLibrary();
+    } finally {
+      this.uploadInProgress = false;
+      this.#updateLaunchAvailability();
+      if (this.libraryReady) {
+        this.#setConnectionStatus("Local server", "connected");
+      }
     }
   }
 
@@ -1908,6 +1952,7 @@ export class HomeController {
 
   #updateLaunchAvailability() {
     this.elements.preview.disabled = !this.libraryReady;
+    this.elements.upload.disabled = !this.libraryReady || this.uploadInProgress;
     this.elements.browse.disabled = !this.libraryReady;
     this.elements.tagging.disabled = !this.libraryReady;
     this.elements.launch.disabled = !this.libraryReady || !this.xrSupported;
@@ -2009,6 +2054,11 @@ export class HomeController {
     this.spatialApp?.stop();
     this.elements.sceneControlsHome.append(this.elements.sceneControls);
     this.elements.sceneShell.hidden = true;
+    if (this.sceneNoticeTimer !== null) {
+      clearTimeout(this.sceneNoticeTimer);
+      this.sceneNoticeTimer = null;
+    }
+    this.elements.sceneNotice.hidden = true;
     this.elements.home.hidden = false;
   }
 
@@ -2181,6 +2231,17 @@ export class HomeController {
       error instanceof Error ? error.message : "An unexpected Souvenir error occurred.";
     this.elements.error.textContent = message;
     this.elements.error.hidden = false;
+    if (!this.elements.sceneShell.hidden) {
+      this.elements.sceneNotice.textContent = message;
+      this.elements.sceneNotice.hidden = false;
+      if (this.sceneNoticeTimer !== null) {
+        clearTimeout(this.sceneNoticeTimer);
+      }
+      this.sceneNoticeTimer = setTimeout(() => {
+        this.sceneNoticeTimer = null;
+        this.elements.sceneNotice.hidden = true;
+      }, 6000);
+    }
   }
 }
 

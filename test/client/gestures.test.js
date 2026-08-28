@@ -13,9 +13,9 @@ describe("gesture rules", () => {
     expect(scaled.dimensions).toEqual({ width: 2.4, height: 1.6 });
   });
 
-  it("advances media on single-hand pinch and rescales only with two hands when locked", () => {
+  it("ignores single-hand pinch and rescales only with two hands when locked", () => {
     const panel = createPanel({ id: "panel", locked: true, dimensions: { width: 1.2, height: 0.8 } });
-    expect(interactionMode(panel, 1)).toBe("next-media");
+    expect(interactionMode(panel, 1)).toBe("none");
     // Single-hand gestures leave locked panels untouched.
     const untouched = applyPanelGesture(panel, { hands: 1, translation: { x: 10 }, rotation: { y: 3 } });
     expect(untouched.transform).toEqual(panel.transform);
@@ -27,9 +27,9 @@ describe("gesture rules", () => {
     expect(scaled.transform).toEqual(panel.transform);
   });
 
-  it("only allows next-media advance in zen mode", () => {
+  it("disables pinch interactions in zen mode", () => {
     const panel = createPanel({ id: "panel" });
-    expect(interactionMode(panel, 1, { zen: true })).toBe("next-media");
+    expect(interactionMode(panel, 1, { zen: true })).toBe("none");
     expect(interactionMode(panel, 2, { zen: true })).toBe("none");
     const untouched = applyPanelGesture(panel, { hands: 2, scale: 4 }, {}, { zen: true });
     expect(untouched.dimensions).toEqual(panel.dimensions);

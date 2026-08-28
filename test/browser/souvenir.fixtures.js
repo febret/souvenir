@@ -12,6 +12,7 @@ const IMAGE_FIXTURES = Object.freeze({
 });
 const DEFAULT_IMAGE_FIXTURE = imageFixture(800, 600, "#888888");
 const DEFAULT_LIBRARY_ID = "/g/media";
+const AUTO_MASK_DEFAULT_BLUR = 32;
 const MASK_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGP8////fwYGBgYmEAHCAD34BABm6tHAAAAAAElFTkSuQmCC",
   "base64",
@@ -578,6 +579,7 @@ async function mockServer(
     }
     if (url.pathname === "/api/mask") {
       const path = url.searchParams.get("path") ?? "";
+      const variant = url.searchParams.get("variant") ?? "display";
       const method = route.request().method();
       if (method === "GET") {
         const mask = maskServer.masks.get(path);
@@ -585,7 +587,7 @@ async function mockServer(
         return route.fulfill({
           status: 200,
           contentType: "image/png",
-          body: mask.png,
+          body: variant === "binary" ? (mask.binaryPng ?? mask.png) : mask.png,
         });
       }
       if (method === "PUT") {
@@ -593,6 +595,7 @@ async function mockServer(
         const png = route.request().postDataBuffer() ?? MASK_PNG;
         const mask = {
           png,
+          binaryPng: png,
           blur,
           updatedAt: "2026-08-23T00:00:00Z",
         };
@@ -670,7 +673,8 @@ async function mockServer(
             current.device = autoMaskServer.device ?? "cuda";
             maskServer.masks.set(path, {
               png: maskServer.masks.get(path)?.png ?? MASK_PNG,
-              blur: 0,
+              binaryPng: maskServer.masks.get(path)?.binaryPng ?? MASK_PNG,
+              blur: AUTO_MASK_DEFAULT_BLUR,
               updatedAt: now,
             });
           }
@@ -800,18 +804,6 @@ async function mockServer(
       const path = url.searchParams.get("path") ?? "";
       const method = route.request().method();
       if (method === "POST") {
-        if (!maskServer.masks.has(path)) {
-          autoMaskServer.jobs.set(path, {
-            status: "queued",
-            requested_at: "2026-08-24T00:00:00Z",
-            started_at: null,
-            completed_at: null,
-            updated_at: "2026-08-24T00:00:00Z",
-            error: null,
-            device: null,
-            polls: 0,
-          });
-        }
         if (!depthServer.maps.has(path)) {
           autoDepthServer.jobs.set(path, {
             status: "queued",
@@ -826,26 +818,10 @@ async function mockServer(
         }
       }
       if (method === "DELETE") {
-        const mask = autoMaskServer.jobs.get(path);
         const depth = autoDepthServer.jobs.get(path);
-        if (mask) mask.status = "cancelled";
         if (depth) depth.status = "cancelled";
       }
       if (method === "GET") {
-        const mask = autoMaskServer.jobs.get(path);
-        if (mask && autoMaskServer.autoComplete && (mask.status === "queued" || mask.status === "running")) {
-          mask.polls = (mask.polls ?? 0) + 1;
-          if (mask.polls === 1) {
-            mask.status = "running";
-          } else {
-            mask.status = "completed";
-            maskServer.masks.set(path, {
-              png: maskServer.masks.get(path)?.png ?? MASK_PNG,
-              blur: 0,
-              updatedAt: "2026-08-24T00:00:00Z",
-            });
-          }
-        }
         const depth = autoDepthServer.jobs.get(path);
         if (depth && autoDepthServer.autoComplete && (depth.status === "queued" || depth.status === "running")) {
           depth.polls = (depth.polls ?? 0) + 1;
@@ -862,15 +838,15 @@ async function mockServer(
       }
       const maskStatus = autoMaskServer.jobs.get(path)?.status ?? (maskServer.masks.has(path) ? "completed" : "idle");
       const depthStatus = autoDepthServer.jobs.get(path)?.status ?? (depthServer.maps.has(path) ? "completed" : "idle");
-      const status = [maskStatus, depthStatus].includes("running")
+      const status = depthStatus === "running"
         ? "running"
-        : [maskStatus, depthStatus].includes("queued")
+        : depthStatus === "queued"
           ? "queued"
-          : [maskStatus, depthStatus].includes("failed")
+          : depthStatus === "failed"
             ? "failed"
-            : [maskStatus, depthStatus].includes("cancelled")
+            : depthStatus === "cancelled"
               ? "cancelled"
-              : (maskServer.masks.has(path) && depthServer.maps.has(path) ? "completed" : "idle");
+              : (depthServer.maps.has(path) ? "completed" : "idle");
       return route.fulfill({
         json: {
           path,
@@ -958,20 +934,25 @@ async function sceneObjectScreenPoint(page, matcher, localPoint = null) {
     ({ matcher, localPoint }) => {
       const app = window.__souvenirApp;
       let target = null;
-      app.scene.traverse((object) => {
-        if (target) return;
-        const data = object.userData;
-        if (
-          Object.entries(matcher).every(([key, value]) => {
-            if (key === "entryPath") return data.entry?.path === value;
-            return data[key] === value;
-          })
-        ) {
-          target = object;
-        }
-      });
+      const searchScene = (scene) => {
+        scene.traverse((object) => {
+          if (target) return;
+          const data = object.userData;
+          if (
+            Object.entries(matcher).every(([key, value]) => {
+              if (key === "entryPath") return data.entry?.path === value;
+              return data[key] === value;
+            })
+          ) {
+            target = object;
+          }
+        });
+      };
+      searchScene(app.scene);
+      if (!target && app.desktopOverlayScene) searchScene(app.desktopOverlayScene);
       if (!target) return null;
       app.scene.updateMatrixWorld(true);
+      if (app.desktopOverlayScene) app.desktopOverlayScene.updateMatrixWorld(true);
       const vector = target.position.clone();
       if (localPoint) {
         vector.set(localPoint.x ?? 0, localPoint.y ?? 0, localPoint.z ?? 0);

@@ -155,3 +155,36 @@ kbd {
     grid-template-columns: 1fr;
   }
 }
+
+.scene-hud {
+  gap: 4px;
+}
+
+.scene-brand,
+.preview-hint,
+.scene-hud .scene-controls,
+.scene-notice {
+  padding: 4px !important;
+}
+
+.scene-hud .scene-controls,
+.scene-hud .scene-controls-row {
+  gap: 4px !important;
+}
+
+.scene-hud .scene-controls input,
+.scene-hud .scene-controls select {
+  padding: 4px !important;
+  font-size: 0.95rem;
+}
+
+.scene-hud .scene-controls label,
+.scene-hud .scene-controls output {
+  font-size: 0.9rem;
+}
+
+.scene-hud .scene-controls .compact-button {
+  padding: 0 4px !important;
+  min-height: 40px;
+  font-size: 0.98rem;
+}

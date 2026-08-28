@@ -1,6 +1,6 @@
 import * as THREE from "three";
 
-const DEFAULT_FONT = "600 38px system-ui, sans-serif";
+const DEFAULT_FONT = "600 38px Inter, system-ui, sans-serif";
 export const INTERACTION_LAYER = 1;
 
 export function markInteractive(object) {
@@ -51,6 +51,8 @@ export function makeLabelTexture(
     align = "center",
     padding = 30,
     resolutionScale = 1,
+    shape = "rounded",
+    radius = 22,
   } = {},
 ) {
   return makeCanvasTexture({
@@ -59,7 +61,13 @@ export function makeLabelTexture(
     resolutionScale,
     draw(context) {
       context.clearRect(0, 0, width, height);
-      roundedRect(context, 2, 2, width - 4, height - 4, 22);
+      if (shape === "circle") {
+        context.beginPath();
+        context.arc(width / 2, height / 2, Math.min(width, height) / 2 - 2, 0, Math.PI * 2);
+        context.closePath();
+      } else {
+        roundedRect(context, 2, 2, width - 4, height - 4, radius);
+      }
       context.fillStyle = background;
       context.fill();
       context.strokeStyle = border;
@@ -91,6 +99,11 @@ export function makeButton(
     textureWidth = 512,
     textureHeight = 128,
     textureResolutionScale = 1,
+    font = DEFAULT_FONT,
+    align = "center",
+    padding = 30,
+    shape = "rounded",
+    radius = 22,
   } = {},
 ) {
   const texture = makeLabelTexture(label, {
@@ -99,6 +112,11 @@ export function makeButton(
     background,
     foreground,
     border,
+    font,
+    align,
+    padding,
+    shape,
+    radius,
     resolutionScale: textureResolutionScale,
   });
   const material = new THREE.MeshBasicMaterial({

@@ -21,7 +21,8 @@ import { DirectoryMenu } from "./directory-menu.js";
 
 const VIEW_MODES = ["names", "thumbnails", "large"];
 const SORT_MODES = ["name", "mtime", "size", "random"];
-const BROWSER_TEXTURE_RESOLUTION = 2;
+const BROWSER_TEXTURE_RESOLUTION = 4;
+const UI_FONT = "Inter, system-ui, sans-serif";
 
 function entryTexture(entry) {
   return makeCanvasTexture({
@@ -36,12 +37,12 @@ function entryTexture(entry) {
       context.lineWidth = 3;
       context.stroke();
       context.fillStyle = "#e7f0ec";
-      context.font = "600 34px system-ui, sans-serif";
+      context.font = `600 34px ${UI_FONT}`;
       context.textAlign = "left";
       context.textBaseline = "middle";
       context.fillText("Media", 28, 48);
       context.fillStyle = "#eef5f2";
-      context.font = "500 35px system-ui, sans-serif";
+      context.font = `500 35px ${UI_FONT}`;
       context.fillText(entry.name, 28, 105, canvas.width - 56);
     },
   });
@@ -59,13 +60,20 @@ function backdropTexture(title) {
       context.strokeStyle = "#53665f";
       context.lineWidth = 4;
       context.stroke();
+      // Title stripe
+      context.fillStyle = "#111e1c";
+      roundedRect(context, 2, 2, canvas.width - 4, 72, [35, 35, 0, 0]);
+      context.fill();
       context.fillStyle = "#91a39c";
-      context.font = "600 24px system-ui, sans-serif";
-      context.letterSpacing = "2px";
-      context.fillText("MEDIA BROWSER", 52, 54);
-      context.fillStyle = "#f0f6f3";
-      context.font = "600 40px system-ui, sans-serif";
-      context.fillText(title || "Media home", 52, 105, canvas.width - 104);
+      context.font = `700 22px ${UI_FONT}`;
+      context.letterSpacing = "3px";
+      context.textAlign = "left";
+      context.textBaseline = "middle";
+      context.fillText("MEDIA BROWSER", 48, 36);
+      context.letterSpacing = "0px";
+      context.fillStyle = "#c8d8d2";
+      context.font = `500 26px ${UI_FONT}`;
+      context.fillText(title || "Media home", 48, 62, canvas.width - 96);
     },
   });
 }
@@ -99,7 +107,7 @@ export class MediaBrowserView extends THREE.Group {
     this.entries = [];
     this.rawEntries = [];
     this.navigationGeneration = 0;
-    this.viewMode = "names";
+    this.viewMode = "thumbnails";
     this.sortMode = "name";
     this.page = 0;
     this.selectMode = false;
@@ -135,22 +143,23 @@ export class MediaBrowserView extends THREE.Group {
     this.add(this.backdrop);
 
     const controls = [
-      ["Page -", "browser-page-prev"],
-      ["Page +", "browser-page-next"],
-      ["View", "browser-view"],
-      ["Sort", "browser-sort"],
-      ["Select", "browser-toggle-select-mode"],
-      ["Filter Tags", "toggle-tag-filter"],
-      ["Close", "browser-close"],
+      ["◀ Prev", "browser-page-prev"],
+      ["Next ▶", "browser-page-next"],
+      ["⊞ View", "browser-view"],
+      ["⇅ Sort", "browser-sort"],
+      ["☑ Select", "browser-toggle-select-mode"],
+      ["⊛ Tags", "toggle-tag-filter"],
+      ["✕ Close", "browser-close"],
     ];
     this.controls = new THREE.Group();
     controls.forEach(([label, action], index) => {
       const button = makeButton(label, action, {
         width: 0.13,
-        height: 0.06,
+        height: 0.052,
+        font: `600 30px ${UI_FONT}`,
         textureResolutionScale: BROWSER_TEXTURE_RESOLUTION,
       });
-      button.position.set(-0.45 + index * 0.15, 0.3, 0);
+      button.position.set(-0.45 + index * 0.15, 0.265, 0);
       button.userData.browser = this;
       button.userData.gestureTarget = false;
       this.controls.add(button);
@@ -158,20 +167,21 @@ export class MediaBrowserView extends THREE.Group {
     this.add(this.controls);
 
     this.directoryControls = new THREE.Group();
-    this.directoryControls.position.y = 0.225;
+    this.directoryControls.position.y = 0.198;
     this.add(this.directoryControls);
     const navigationControls = [
-      ["Up", "browser-directory-up", -0.49, 0.1],
-      ["Subdir ▾", "browser-toggle-subdirectories", 0.07, 0.19],
-      ["<", "browser-subdirectory-prev", 0.23, 0.07],
-      [".", "browser-directory-current", 0.32, 0.07],
-      [">", "browser-subdirectory-next", 0.41, 0.07],
+      ["↑ Up", "browser-directory-up", -0.49, 0.1],
+      ["⊞ Dirs", "browser-toggle-subdirectories", 0.07, 0.19],
+      ["◀", "browser-subdirectory-prev", 0.23, 0.07],
+      ["●", "browser-directory-current", 0.32, 0.07],
+      ["▶", "browser-subdirectory-next", 0.41, 0.07],
     ];
     this.navigationButtons = new Map();
     for (const [label, action, x, width] of navigationControls) {
       const button = makeButton(label, action, {
         width,
-        height: 0.052,
+        height: 0.044,
+        font: `600 28px ${UI_FONT}`,
         textureResolutionScale: BROWSER_TEXTURE_RESOLUTION,
       });
       button.position.set(x, 0, 0.005);
@@ -181,7 +191,7 @@ export class MediaBrowserView extends THREE.Group {
       this.navigationButtons.set(action, button);
     }
     this.directoryLabel = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.38, 0.052),
+      new THREE.PlaneGeometry(0.38, 0.044),
       new THREE.MeshBasicMaterial({
         transparent: true,
         side: THREE.DoubleSide,
@@ -470,7 +480,7 @@ export class MediaBrowserView extends THREE.Group {
     const maxItems = this.#pageSize();
     const cardWidth = columns === 1 ? 0.94 : columns === 2 ? 0.455 : 0.295;
     const cardHeight = this.viewMode === "names" ? 0.062 : this.viewMode === "large" ? 0.2 : 0.125;
-    const startY = 0.145;
+    const startY = 0.155;
 
     const pageCount = this.#pageCount();
     this.page = Math.min(this.page, pageCount - 1);
@@ -485,7 +495,7 @@ export class MediaBrowserView extends THREE.Group {
           map: makeLabelTexture("No matching media — clear Filter Tags", {
             width: 800,
             height: 100,
-            font: "600 27px system-ui, sans-serif",
+            font: `600 27px ${UI_FONT}`,
             resolutionScale: BROWSER_TEXTURE_RESOLUTION,
           }),
           transparent: true,
@@ -527,7 +537,7 @@ export class MediaBrowserView extends THREE.Group {
             map: makeLabelTexture(selected ? "☑" : "☐", {
               width: 160,
               height: 80,
-              font: "700 40px system-ui, sans-serif",
+              font: `700 40px ${UI_FONT}`,
               background: "rgba(10, 18, 16, 0.84)",
               border: "rgba(96, 221, 143, 0.8)",
               resolutionScale: BROWSER_TEXTURE_RESOLUTION,
@@ -558,7 +568,7 @@ export class MediaBrowserView extends THREE.Group {
             map: makeLabelTexture(entry.name, {
               width: 600,
               height: 90,
-              font: "500 28px system-ui, sans-serif",
+              font: `500 28px ${UI_FONT}`,
               background: "rgba(12, 19, 18, 0.92)",
               border: "rgba(86, 108, 100, 0.7)",
               resolutionScale: BROWSER_TEXTURE_RESOLUTION,
@@ -590,7 +600,7 @@ export class MediaBrowserView extends THREE.Group {
       height: 120,
       align: "left",
       padding: 24,
-      font: "600 27px system-ui, sans-serif",
+      font: `600 27px ${UI_FONT}`,
       resolutionScale: BROWSER_TEXTURE_RESOLUTION,
     });
     this.directoryLabel.material.needsUpdate = true;

@@ -9,12 +9,15 @@ from io import BytesIO
 from pathlib import Path
 from typing import Literal, Protocol
 
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageOps
 
 from .masks import MaskStore
 
 AutoMaskStatus = Literal["idle", "queued", "running", "completed", "failed", "cancelled"]
-AUTO_MASK_INFERENCE_MAX_DIMENSION = 512
+DEFAULT_AUTO_MASK_DIMENSION = 512
+MAX_AUTO_MASK_DIMENSION = 2048
+AUTO_MASK_INFERENCE_MAX_DIMENSION = DEFAULT_AUTO_MASK_DIMENSION
+AUTO_MASK_DEFAULT_BLUR = 32
 BIREFNET_RUNTIME_DEPENDENCIES = (
     "torch",
     "torchvision",
@@ -33,11 +36,18 @@ def _fit_within_max_dimension(
     width: int,
     height: int,
     max_dimension: int = AUTO_MASK_INFERENCE_MAX_DIMENSION,
+    divisible_by: int = 32,
 ) -> tuple[int, int]:
     source_width = max(1, int(width))
     source_height = max(1, int(height))
     scale = min(1.0, max_dimension / max(source_width, source_height))
-    return max(1, round(source_width * scale)), max(1, round(source_height * scale))
+    target_width = source_width * scale
+    target_height = source_height * scale
+    rounded_width = (int(target_width) // divisible_by) * divisible_by
+    rounded_height = (int(target_height) // divisible_by) * divisible_by
+    if rounded_width < divisible_by and rounded_height < divisible_by:
+        return divisible_by, divisible_by
+    return max(divisible_by, rounded_width), max(divisible_by, rounded_height)
 
 
 def _inference_image(image: Image.Image, max_dimension: int) -> Image.Image:
@@ -52,7 +62,6 @@ def _background_mask(
     output_size: tuple[int, int],
     *,
     threshold: float,
-    edge_feather: float,
 ) -> Image.Image:
     threshold_value = round(threshold * 255)
     foreground = probability.convert("L").point(
@@ -61,9 +70,7 @@ def _background_mask(
     )
     background = ImageOps.invert(foreground)
     if background.size != output_size:
-        background = background.resize(output_size, Image.Resampling.LANCZOS)
-    if edge_feather > 0:
-        background = background.filter(ImageFilter.GaussianBlur(edge_feather))
+        background = background.resize(output_size, Image.Resampling.NEAREST)
     return background
 
 
@@ -86,7 +93,7 @@ def _missing_runtime_dependencies(packages: tuple[str, ...]) -> list[str]:
 
 
 class AutoMaskGenerator(Protocol):
-    def generate(self, source: Path) -> tuple[bytes, str]: ...
+    def generate(self, source: Path, *, max_dimension: int | None = None) -> tuple[bytes, str]: ...
 
     def close(self) -> None: ...
 
@@ -97,15 +104,13 @@ class BiRefNetAutoMaskGenerator:
         *,
         model_id: str = "ZhengPeng7/BiRefNet",
         device: Literal["auto", "cuda", "cpu"] = "auto",
-        input_size: int = AUTO_MASK_INFERENCE_MAX_DIMENSION,
+        input_size: int = DEFAULT_AUTO_MASK_DIMENSION,
         threshold: float = 0.48,
-        edge_feather: float = 0.8,
     ) -> None:
         self.model_id = model_id
         self.device = _resolve_device(device)
-        self.input_size = min(AUTO_MASK_INFERENCE_MAX_DIMENSION, max(1, int(input_size)))
+        self.input_size = min(MAX_AUTO_MASK_DIMENSION, max(1, int(input_size)))
         self.threshold = threshold
-        self.edge_feather = edge_feather
         self._model = None
         self._torch = None
         self._transforms = None
@@ -160,11 +165,13 @@ class BiRefNetAutoMaskGenerator:
         )
         self._model = model
 
-    def generate(self, source: Path) -> tuple[bytes, str]:
+    def generate(self, source: Path, *, max_dimension: int | None = None) -> tuple[bytes, str]:
         self._load()
         with Image.open(source) as loaded:
             image = loaded.convert("RGB")
-        scaled_image = _inference_image(image, self.input_size)
+        requested_dimension = self.input_size if max_dimension is None else int(max_dimension)
+        resolved_max_dimension = max(64, min(MAX_AUTO_MASK_DIMENSION, requested_dimension))
+        scaled_image = _inference_image(image, resolved_max_dimension)
         tensor = self._transforms(scaled_image).unsqueeze(0).to(self.device)
         if self.device == "cuda":
             tensor = tensor.half()
@@ -178,7 +185,6 @@ class BiRefNetAutoMaskGenerator:
             probability,
             image.size,
             threshold=self.threshold,
-            edge_feather=self.edge_feather,
         )
         rgba = Image.new("RGBA", background.size, (255, 255, 255, 0))
         rgba.putalpha(background)
@@ -206,6 +212,7 @@ class _JobState:
     completed_at: str | None
     error: str | None
     device: str | None
+    max_dimension: int
     cancel_requested: bool = False
 
 
@@ -247,8 +254,9 @@ class AutoMaskService:
             thread.join(timeout=5)
         self._generator.close()
 
-    def request(self, relative: Path) -> dict[str, object]:
+    def request(self, relative: Path, *, max_dimension: int = DEFAULT_AUTO_MASK_DIMENSION) -> dict[str, object]:
         path = relative.as_posix()
+        resolved_max_dimension = max(64, min(MAX_AUTO_MASK_DIMENSION, int(max_dimension)))
         with self._condition:
             existing = self._jobs.get(path)
             if existing and existing.status in {"queued", "running"}:
@@ -264,6 +272,7 @@ class AutoMaskService:
                 completed_at=None,
                 error=None,
                 device=None,
+                max_dimension=resolved_max_dimension,
             )
             self._jobs[path] = state
             self._queue.append(path)
@@ -315,12 +324,13 @@ class AutoMaskService:
                 state.started_at = _timestamp()
                 state.updated_at = state.started_at
                 request_id = state.request_id
-            self._process(path, request_id)
+                max_dimension = state.max_dimension
+            self._process(path, request_id, max_dimension)
 
-    def _process(self, path: str, request_id: int) -> None:
+    def _process(self, path: str, request_id: int, max_dimension: int) -> None:
         relative = Path(path)
         try:
-            data, device = self._generator.generate(self._root / relative)
+            data, device = self._generator.generate(self._root / relative, max_dimension=max_dimension)
             with self._condition:
                 state = self._jobs.get(path)
                 if state is None or state.request_id != request_id:
@@ -332,7 +342,7 @@ class AutoMaskService:
                     state.completed_at = now
                     state.device = device
                     return
-            self._masks.write_generated(relative, data, blur=0)
+            self._masks.write_generated(relative, data, blur=AUTO_MASK_DEFAULT_BLUR)
             with self._condition:
                 state = self._jobs.get(path)
                 if state is None or state.request_id != request_id:

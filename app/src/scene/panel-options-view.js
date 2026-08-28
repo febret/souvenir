@@ -1,151 +1,123 @@
 import * as THREE from "three";
 
-import {
-  disposeObject,
-  markInteractive,
-  makeButton,
-  makeLabelTexture,
-  setButtonState,
-} from "./canvas-ui.js";
+import { disposeObject } from "./canvas-ui.js";
 
-const SAVE_MODE_DEFINITIONS = [
-  ["Disabled", "disabled"],
-  ["Scale", "scale"],
-  ["Full", "full"],
-];
+import { PANEL_WIDTH } from "./panel-options/constants.js";
+import { computeSignature } from "./panel-options/signature.js";
+import { computeLayout, computeBounds } from "./panel-options/layout.js";
+import {
+  createWidgetFactory,
+  addTitle,
+  addOptionsRow,
+  addSaveModeSection,
+  addDepthSection,
+  addLightingSection,
+} from "./panel-options/widgets.js";
+import { addTagsSection } from "./panel-options/tags-section.js";
+import { addBackdrop } from "./panel-options/backdrop.js";
+import { applyControlStates } from "./panel-options/control-states.js";
 
 /**
  * Owns the dynamic options chrome for one panel. The group is rebuilt only when
  * layout, save mode, tag definitions, or tag selection changes.
  */
 export class PanelOptionsView extends THREE.Group {
-  constructor(panelId) {
+  constructor(panelId, { onDrag = null } = {}) {
     super();
     this.panelId = panelId;
     this.signature = "";
     this.name = "panel-options";
     this.visible = false;
+    this.onDrag = onDrag;
+    this.content = new THREE.Group();
+    this.add(this.content);
+    this.depthControl = null;
+    this.dragTarget = {
+      onGesture: (gesture) => this.onDrag?.(gesture),
+    };
+    this.layout = {
+      width: PANEL_WIDTH,
+      height: 0.5,
+    };
   }
 
-  update({ width, height, saveMode, tagDefinitions, mediaTagIds, depthOffset }) {
+  setDepthControl(control) {
+    if (this.depthControl === control) return;
+    if (this.depthControl?.parent === this) this.remove(this.depthControl);
+    this.depthControl = control ?? null;
+    if (this.depthControl) this.add(this.depthControl);
+  }
+
+  update({
+    saveMode,
+    tagDefinitions,
+    mediaTagIds,
+    tagListExpanded = true,
+    depthOffset,
+    admSettings,
+  }) {
+    const settings = admSettings ?? {};
     const definitions = Array.isArray(tagDefinitions) ? tagDefinitions : [];
     const selectedIds = Array.isArray(mediaTagIds) ? mediaTagIds : [];
-    const signature = JSON.stringify({
-      width,
-      height,
+    const expandedTags = Boolean(tagListExpanded);
+    const signature = computeSignature({
       saveMode,
-      tags: definitions.map(({ id, name }) => [id, name]),
-      selected: selectedIds,
+      tagDefinitions: definitions,
+      mediaTagIds: selectedIds,
+      tagListExpanded: expandedTags,
+      admSettings: settings,
     });
     if (signature === this.signature) {
       this.position.z = depthOffset;
       return false;
     }
     this.signature = signature;
-    disposeObject(this);
-    this.clear();
+    disposeObject(this.content);
+    this.content.clear();
 
-    const backdrop = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.74, 0.5),
-      new THREE.MeshBasicMaterial({
-        color: 0x101817,
-        transparent: true,
-        opacity: 0.96,
-        side: THREE.DoubleSide,
-        toneMapped: false,
-      }),
-    );
-    backdrop.position.set(0, 0, -0.01);
-    backdrop.userData.gestureTarget = false;
-    markInteractive(backdrop);
-    this.add(backdrop);
+    const widgets = createWidgetFactory({ panelId: this.panelId });
+    const layout = computeLayout({ tagCount: definitions.length, expandedTags });
 
-    const title = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.68, 0.06),
-      new THREE.MeshBasicMaterial({
-        map: makeLabelTexture("OPTIONS", { width: 840, height: 120 }),
-        transparent: true,
-        side: THREE.DoubleSide,
-      }),
-    );
-    title.position.set(0, 0.22, 0.002);
-    title.userData.gestureTarget = false;
-    this.add(title);
+    addTitle(this.content, layout.topY);
+    addOptionsRow(this.content, widgets, layout.optionsY);
+    addSaveModeSection(this.content, widgets, {
+      labelY: layout.saveLabelY,
+      rowY: layout.saveRowY,
+      saveMode,
+    });
+    addDepthSection(this.content, widgets, {
+      labelY: layout.depthLabelY,
+      effectButtonY: layout.effectButtonY,
+      deleteDepthButtonY: layout.deleteDepthButtonY,
+      settings,
+    });
 
-    const optionsRow = [
-      ["Mask", "toggle-mask"],
-      ["Edit BG", "edit-erase-mask"],
-      ["3D Mode", "toggle-3d-mode"],
-    ];
-    for (const [index, [label, action]] of optionsRow.entries()) {
-      this.add(this.#button(label, action, {
-        x: (index - 1) * 0.235,
-        y: 0.145,
-        width: 0.21,
-      }));
+    if (this.depthControl) {
+      this.depthControl.position.set(0, layout.depthSliderY, 0.004);
+      this.depthControl.visible = true;
     }
 
-    const saveLabel = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.68, 0.04),
-      new THREE.MeshBasicMaterial({
-        map: makeLabelTexture("Panel save mode", {
-          width: 760,
-          height: 80,
-          align: "left",
-          padding: 16,
-          font: "600 28px system-ui, sans-serif",
-        }),
-        transparent: true,
-        side: THREE.DoubleSide,
-      }),
-    );
-    saveLabel.position.set(0, 0.085, 0.003);
-    saveLabel.userData.gestureTarget = false;
-    this.add(saveLabel);
-    for (const [index, [label, value]] of SAVE_MODE_DEFINITIONS.entries()) {
-      const button = this.#button(label, `set-save-mode:${value}`, {
-        x: (index - 1) * 0.235,
-        y: 0.035,
-        width: 0.21,
-        height: 0.042,
-      });
-      setButtonState(button, { active: saveMode === value });
-      this.add(button);
-    }
+    addLightingSection(this.content, widgets, layout, settings);
 
-    const columns = 3;
-    const rows = Math.max(1, Math.ceil(definitions.length / columns));
-    const cellHeight = rows > 3 ? 0.042 : 0.05;
-    const startY = -0.04;
-    for (const [index, definition] of definitions.entries()) {
-      const selected = selectedIds.includes(definition.id);
-      const button = makeButton(
-        `${selected ? "✓ " : ""}${definition.name}`,
-        `toggle-media-tag:${definition.id}`,
-        {
-          width: 0.225,
-          height: cellHeight,
-          textureWidth: 540,
-          background: selected ? "#294c38" : "#17211f",
-          border: selected ? "#8ce8af" : "#40534d",
-        },
-      );
-      button.position.set(
-        ((index % columns) - 1) * 0.235,
-        startY - Math.floor(index / columns) * (cellHeight + 0.01),
-        0.004,
-      );
-      this.#markPanelButton(button);
-      this.add(button);
-    }
+    const tagsMinY = addTagsSection(this.content, widgets, {
+      tagsStartY: layout.tagsStartY,
+      cellHeight: layout.cellHeight,
+      tagDefinitions: definitions,
+      selectedIds,
+      expandedTags,
+    });
 
-    const minY = startY - rows * (cellHeight + 0.01) - 0.03;
-    const scale = Math.min(1, Math.max(0.5, (width - 0.03) / 0.76));
-    this.scale.setScalar(scale);
-    this.position.set(width / 2 + 0.4 * scale, 0, depthOffset);
-    const desiredHeight = 0.31 + rows * (cellHeight + 0.01);
-    backdrop.scale.y = Math.min(1.4, Math.max(1, desiredHeight / 0.5));
-    backdrop.position.y = (0.2 + minY) / 2;
+    const bounds = computeBounds({
+      topY: layout.topY,
+      tagsStartY: layout.tagsStartY,
+      cellHeight: layout.cellHeight,
+      tagsMinY,
+      expandedTags,
+    });
+    addBackdrop(this.content, bounds, { dragTarget: this.dragTarget, expandedTags });
+
+    this.layout = { width: PANEL_WIDTH, height: bounds.height };
+    this.position.z = depthOffset;
     return true;
   }
 
@@ -156,33 +128,32 @@ export class PanelOptionsView extends THREE.Group {
     maskEnabled,
     admEnabled,
     admPromptVisible,
+    softDepthEnabled,
+    fadeDepthEnabled,
+    focusBlurEnabled,
+    lightFxEnabled,
+    lightDirection,
+    lightColor,
+    ambientColor,
+    ambientIntensity,
+    depthAvailable,
   }) {
-    for (const control of this.children) {
-      const action = control.userData?.action;
-      if (!action) continue;
-      const inactive = (action === "toggle-mask" && !maskAvailable)
-        || (action === "edit-erase-mask" && !mediaLoaded)
-        || (action === "toggle-3d-mode" && mediaType !== "image")
-        || admPromptVisible;
-      const active = (action === "toggle-mask" && maskEnabled && maskAvailable)
-        || (action === "toggle-3d-mode" && admEnabled);
-      control.material.color.set(inactive ? 0x5f6b67 : active ? 0xaaf1c3 : 0xffffff);
-    }
-  }
-
-  #button(label, action, { x, y, width, height = 0.045 }) {
-    const button = makeButton(label, action, {
-      width,
-      height,
-      textureWidth: 460,
+    applyControlStates(this.content, {
+      maskAvailable,
+      mediaLoaded,
+      mediaType,
+      maskEnabled,
+      admEnabled,
+      admPromptVisible,
+      softDepthEnabled,
+      fadeDepthEnabled,
+      focusBlurEnabled,
+      lightFxEnabled,
+      lightDirection,
+      lightColor,
+      ambientColor,
+      ambientIntensity,
+      depthAvailable,
     });
-    button.position.set(x, y, 0.004);
-    this.#markPanelButton(button);
-    return button;
-  }
-
-  #markPanelButton(button) {
-    button.userData.panelId = this.panelId;
-    button.userData.gestureTarget = false;
   }
 }

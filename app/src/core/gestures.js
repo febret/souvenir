@@ -42,15 +42,13 @@ export function updateInteractionState(state, event) {
  * hands.
  *
  * Unlocked panels move with one hand and move/reorient/rescale with two.
- * Locked panels ignore one-hand movement (the interaction layer treats a
- * single-hand pinch as next-media advance) and only rescale with two hands.
- * In Zen mode panels are fully locked: one-hand pinch still advances media,
- * two-hand pinches do nothing.
+ * Locked panels ignore one-hand movement and only rescale with two hands.
+ * In Zen mode panels are fully locked: pinch gestures do nothing.
  */
 export function interactionMode(panel, hands, { zen = false } = {}) {
   if (!panel || hands < 1) return "none";
-  if (zen) return hands === 1 ? "next-media" : "none";
-  if (panel.locked) return hands === 1 ? "next-media" : "panel-rescale";
+  if (zen) return "none";
+  if (panel.locked) return hands === 1 ? "none" : "panel-rescale";
   return "panel-transform";
 }
 
@@ -78,7 +76,6 @@ export function applyPanelGesture(panel, gesture, limits = {}, options = {}) {
     result.dimensions.width = clamp(result.dimensions.width * scale, bound.dimensions.minWidth, bound.dimensions.maxWidth);
     result.dimensions.height = clamp(result.dimensions.height * scale, bound.dimensions.minHeight, bound.dimensions.maxHeight);
   }
-  // "next-media" and "none" modes leave the panel state untouched; media
-  // navigation is handled by the interaction layer on pinch release.
+  // "none" mode leaves the panel state untouched.
   return result;
 }

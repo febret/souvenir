@@ -4,6 +4,7 @@ import {
   SETTINGS_VERSION,
   SETTINGS_STORAGE_KEY,
   loadSettings,
+  normalizePowerOfTwoResolution,
   reconcileSelectedDirectories,
   saveSettings,
   validateSettings,
@@ -45,11 +46,18 @@ describe("settings", () => {
       slideshowIntervalMs: Infinity,
       captionDistance: 10,
       admDefaultDepthIntensity: -1,
-      admMaxResolution: 700,
+      admMaxResolution: 4096,
     });
     expect(result.valid).toBe(false);
     expect(result.errors).toHaveLength(5);
     expect(result.value.autoplayVideos).toBe(DEFAULT_SETTINGS.autoplayVideos);
+    expect(result.value.admMaxResolution).toBe(2048);
+  });
+
+  it("normalizes to a valid power-of-two resolution", () => {
+    expect(normalizePowerOfTwoResolution(768)).toBe(1024);
+    expect(normalizePowerOfTwoResolution(1536)).toBe(2048);
+    expect(normalizePowerOfTwoResolution(1234)).toBe(1024);
   });
 
   it("persists valid settings and safely falls back from corrupt values", () => {

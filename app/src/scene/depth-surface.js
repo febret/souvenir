@@ -2,6 +2,27 @@ import * as THREE from "three";
 
 const MAX_GRID_SEGMENTS = 256;
 
+function clampDepthSample(value) {
+  return Math.max(0, Math.min(1, Number(value) || 0));
+}
+
+/**
+ * Maps the normalized fade start control to a depth-map sample range.
+ * 0 => minimum sampled depth (front), 1 => maximum sampled depth (back).
+ * Fade always ends at maximum sampled depth (back).
+ */
+export function resolveFadeDepthRange(normalizedStart, minimumSampleDepth, maximumSampleDepth) {
+  const minimum = clampDepthSample(minimumSampleDepth);
+  const maximum = clampDepthSample(maximumSampleDepth);
+  const rangeMin = Math.min(minimum, maximum);
+  const rangeMax = Math.max(minimum, maximum);
+  const start = clampDepthSample(normalizedStart);
+  return {
+    startDepth: rangeMin + (rangeMax - rangeMin) * start,
+    endDepth: rangeMax,
+  };
+}
+
 /**
  * Builds the displaced image plane used by panel depth mode. Keeping this CPU
  * conversion outside PanelView makes the expensive rebuild boundary explicit.
@@ -23,9 +44,11 @@ export function createDisplacedPlaneGeometry(
   const context = probe.getContext("2d", { willReadFrequently: true });
   context.drawImage(depthCanvas, 0, 0, width, height);
   const pixels = context.getImageData(0, 0, width, height).data;
+  let minimumSampleDepth = 1;
   let maximumSampleDepth = 0;
   for (let offset = 0; offset < pixels.length; offset += 4) {
     const depth = (pixels[offset] ?? 0) / 255;
+    if (depth < minimumSampleDepth) minimumSampleDepth = depth;
     if (depth > maximumSampleDepth) maximumSampleDepth = depth;
   }
   const geometry = new THREE.PlaneGeometry(1, 1, gridSegments, gridSegments);
@@ -43,6 +66,8 @@ export function createDisplacedPlaneGeometry(
   geometry.computeVertexNormals();
   return {
     geometry,
+    minimumSampleDepth,
+    maximumSampleDepth,
     maximumDepth: maximumSampleDepth * safeIntensity * 0.18,
   };
 }

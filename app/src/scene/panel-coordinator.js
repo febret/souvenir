@@ -79,6 +79,7 @@ export class PanelCoordinator {
     this.pendingTagSaves = new Set();
     this.browser = null;
     this.saveTimer = null;
+    this.overlayScene = null;
 
     let saved = {
       panels: [],
@@ -193,6 +194,7 @@ export class PanelCoordinator {
         });
         this.panelViews.set(panel.id, view);
         this.scene.add(view);
+        if (this.overlayScene) view.setOverlayScene(this.overlayScene);
       }
       view.applyState({
         ...panel,
@@ -332,7 +334,10 @@ export class PanelCoordinator {
     if (action === "browse") {
       this.openBrowser(panel);
     } else if (action === "toggle-options") {
-      this.panelViews.get(panel.id)?.toggleOptions();
+      const open = this.panelViews.get(panel.id)?.toggleOptions();
+      if (open === false) this.maskWorkflow.flushAdmSettingsForPanel(panel.id);
+    } else if (action === "toggle-tag-list") {
+      this.panelViews.get(panel.id)?.toggleTagList();
     } else if (action.startsWith("toggle-media-tag:")) {
       if (this.pendingTagSaves.has(panelId)) return;
       const tagId = action.slice("toggle-media-tag:".length);
@@ -363,6 +368,26 @@ export class PanelCoordinator {
       this.maskWorkflow.toggleAdm(panel).catch((error) => {
         this.onError?.(new Error(`Could not toggle 3D mode: ${error.message}`));
       });
+    } else if (action === "toggle-soft-depth") {
+      const next = !this.panelViews.get(panel.id)?.softDepthEnabled;
+      this.maskWorkflow.setAdmSetting(panel.id, "softDepthEnabled", next);
+    } else if (action === "toggle-fade-depth") {
+      const next = !this.panelViews.get(panel.id)?.fadeDepthEnabled;
+      this.maskWorkflow.setAdmSetting(panel.id, "fadeDepthEnabled", next);
+    } else if (action === "toggle-focus-blur") {
+      const next = !this.panelViews.get(panel.id)?.focusBlurEnabled;
+      this.maskWorkflow.setAdmSetting(panel.id, "focusBlurEnabled", next);
+    } else if (action === "toggle-light-fx") {
+      const next = !this.panelViews.get(panel.id)?.lightFxEnabled;
+      this.maskWorkflow.setAdmSetting(panel.id, "lightFxEnabled", next);
+    } else if (action.startsWith("set-light-direction:")) {
+      this.maskWorkflow.setAdmSetting(panel.id, "lightDirection", action.slice("set-light-direction:".length));
+    } else if (action.startsWith("set-light-color:")) {
+      this.maskWorkflow.setAdmSetting(panel.id, "lightColor", action.slice("set-light-color:".length));
+    } else if (action.startsWith("set-ambient-color:")) {
+      this.maskWorkflow.setAdmSetting(panel.id, "ambientColor", action.slice("set-ambient-color:".length));
+    } else if (action.startsWith("set-ambient-intensity:")) {
+      this.maskWorkflow.setAdmSetting(panel.id, "ambientIntensity", Number(action.slice("set-ambient-intensity:".length)));
     } else if (action === "edit-erase-mask") {
       this.maskWorkflow.beginEditor(panel);
     } else if (action === "adm-generate-confirm") {
@@ -371,6 +396,10 @@ export class PanelCoordinator {
       });
     } else if (action === "adm-generate-cancel") {
       this.maskWorkflow.cancelAdmGeneration(panel);
+    } else if (action === "delete-depth-mask") {
+      this.maskWorkflow.deleteDepth(panel).catch((error) => {
+        this.onError?.(new Error(`Could not delete depth data: ${error.message}`));
+      });
     } else if (action.startsWith("mask-")) {
       this.maskWorkflow.editorAction(panel, action);
     } else if (action === "previous" || action === "next") {
@@ -479,10 +508,10 @@ export class PanelCoordinator {
     }
   }
 
-  tick(time) {
+  tick(time, camera = this.camera) {
     for (const panel of this.panelState.panels) {
       this.advanceSlideshow(panel, { type: "tick", now: time });
-      this.panelViews.get(panel.id)?.tick(time);
+      this.panelViews.get(panel.id)?.tick(time, camera);
     }
   }
 
@@ -546,6 +575,13 @@ export class PanelCoordinator {
 
   setZenMode(enabled) {
     for (const view of this.panelViews.values()) view.setZenMode(enabled);
+  }
+
+  setOverlayScene(overlayScene) {
+    this.overlayScene = overlayScene;
+    for (const view of this.panelViews.values()) {
+      view.setOverlayScene(overlayScene);
+    }
   }
 
   setPanelTagFilter(panelId, tagIds) {

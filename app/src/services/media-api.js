@@ -69,6 +69,21 @@ export class MediaApi {
     return readJson(await fetch(url));
   }
 
+  async uploadImages(files) {
+    const uploads = Array.from(files ?? []);
+    if (!uploads.length) {
+      throw new MediaApiError("Select at least one image to upload.");
+    }
+    const form = new FormData();
+    uploads.forEach((file) => {
+      form.append("files", file);
+    });
+    return readJson(await fetch(`${this.baseUrl}/api/uploads`, noStore({
+      method: "POST",
+      body: form,
+    })));
+  }
+
   async tags() {
     return readJson(await fetch(`${this.baseUrl}/api/tags`, noStore()));
   }
@@ -215,13 +230,28 @@ export class MediaApi {
     return readJson(await fetch(url, noStore()));
   }
 
-  async saveMediaAdm(path, enabled, depthIntensity) {
+  async saveMediaAdm(path, enabled, depthIntensity, extra = {}) {
     const url = new URL(`${this.baseUrl}/api/media-adm`, window.location.origin);
     url.searchParams.set("path", path ?? "");
     return readJson(await fetch(url, noStore({
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled: Boolean(enabled), depth_intensity: Number(depthIntensity) }),
+      body: JSON.stringify({
+        enabled: Boolean(enabled),
+        depth_intensity: Number(depthIntensity),
+        soft_depth_enabled: Boolean(extra.soft_depth_enabled),
+        soft_depth_blur: Number.isFinite(extra.soft_depth_blur) ? Number(extra.soft_depth_blur) : 12,
+        fade_depth_enabled: Boolean(extra.fade_depth_enabled),
+        fade_depth_start: Number.isFinite(extra.fade_depth_start) ? Number(extra.fade_depth_start) : 0.5,
+        focus_blur_enabled: Boolean(extra.focus_blur_enabled),
+        focus_position: extra.focus_position ?? "middle",
+        focus_strength: extra.focus_strength ?? "middle",
+        light_fx_enabled: Boolean(extra.light_fx_enabled),
+        light_direction: extra.light_direction ?? "front",
+        light_color: extra.light_color ?? "white",
+        ambient_color: extra.ambient_color ?? "white",
+        ambient_intensity: Number.isFinite(extra.ambient_intensity) ? Number(extra.ambient_intensity) : 0.5,
+      }),
     })));
   }
 
@@ -246,8 +276,9 @@ export class MediaApi {
     return readJson(await fetch(url, noStore()));
   }
 
-  async loadMask(path) {
+  async loadMask(path, variant = "display") {
     const url = maskUrl(this.baseUrl, "/api/mask", path);
+    if (variant === "binary") url.searchParams.set("variant", "binary");
     const response = await fetch(url, noStore());
     if (!response.ok) {
       let detail = "";
@@ -280,8 +311,9 @@ export class MediaApi {
     return readJson(await fetch(url, noStore({ method: "DELETE" })));
   }
 
-  async requestAutoMask(path) {
+  async requestAutoMask(path, maxResolution = 512) {
     const url = maskUrl(this.baseUrl, "/api/mask/auto", path);
+    url.searchParams.set("max_resolution", String(maxResolution));
     return readJson(await fetch(url, noStore({ method: "POST" })));
   }
 
@@ -317,6 +349,11 @@ export class MediaApi {
       );
     }
     return response.blob();
+  }
+
+  async deleteDepth(path) {
+    const url = maskUrl(this.baseUrl, "/api/depth", path);
+    return readJson(await fetch(url, noStore({ method: "DELETE" })));
   }
 
   async requestAutoDepth(path, maxResolution = 512) {

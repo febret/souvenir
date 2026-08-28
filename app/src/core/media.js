@@ -18,6 +18,12 @@ export function normalizeMediaEntry(entry) {
   const mtime = Number.isFinite(modified)
     ? modified
     : Date.parse(modified) || 0;
+  const focusPosition = ["middle", "back", "front"].includes(entry?.adm?.focus_position)
+    ? entry.adm.focus_position
+    : "middle";
+  const focusStrength = ["middle", "weak", "strong"].includes(entry?.adm?.focus_strength)
+    ? entry.adm.focus_strength
+    : "middle";
   return {
     ...entry,
     id: path,
@@ -33,6 +39,17 @@ export function normalizeMediaEntry(entry) {
       depth_intensity: Number.isFinite(entry?.adm?.depth_intensity)
         ? entry.adm.depth_intensity
         : 0.35,
+      soft_depth_enabled: Boolean(entry?.adm?.soft_depth_enabled),
+      soft_depth_blur: Number.isFinite(entry?.adm?.soft_depth_blur)
+        ? Math.min(64, Math.max(2, Number(entry.adm.soft_depth_blur)))
+        : 12,
+      fade_depth_enabled: Boolean(entry?.adm?.fade_depth_enabled),
+      fade_depth_start: Number.isFinite(entry?.adm?.fade_depth_start)
+        ? Math.min(1, Math.max(0, Number(entry.adm.fade_depth_start)))
+        : 0.5,
+      focus_blur_enabled: Boolean(entry?.adm?.focus_blur_enabled),
+      focus_position: focusPosition,
+      focus_strength: focusStrength,
     },
   };
 }

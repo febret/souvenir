@@ -9,9 +9,10 @@ import warnings
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
+from typing import Literal
 
 from fastapi import HTTPException
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageFilter, UnidentifiedImageError
 
 from .media import INTERNAL_DIRECTORIES, MASK_DIRECTORY, media_type, media_url, relative_text, resolve_under_root
 
@@ -38,20 +39,27 @@ class MaskStore:
             metadata = self._load_metadata(relative)
             return self._info(relative, metadata)
 
-    def read(self, relative: Path) -> bytes:
+    def read(self, relative: Path, *, variant: Literal["display", "binary"] = "display") -> bytes:
         with self._lock:
             metadata = self._load_metadata(relative)
             if metadata is None:
                 raise HTTPException(404, "mask was not found")
-            mask_path, _ = self._paths(relative)
+            binary_path, display_path, _ = self._paths(relative)
             try:
-                return mask_path.read_bytes()
+                if variant == "binary":
+                    return binary_path.read_bytes()
+                if display_path.exists():
+                    if display_path.is_symlink() or not display_path.is_file():
+                        raise HTTPException(500, "mask storage is invalid")
+                    return display_path.read_bytes()
+                return blurred_mask_png(binary_path.read_bytes(), int(metadata["blur"]))
             except OSError as error:
                 raise HTTPException(500, "mask storage could not be read") from error
 
     def write(self, relative: Path, data: bytes, blur: int) -> dict[str, bool | int | str | None]:
-        normalized = normalize_png(data)
-        return self._write_normalized(relative, normalized, blur)
+        normalized_binary = normalize_png(data)
+        blurred_display = blurred_mask_png(normalized_binary, blur)
+        return self._write_normalized(relative, normalized_binary, blurred_display, blur)
 
     def write_generated(
         self,
@@ -64,13 +72,15 @@ class MaskStore:
                 source_size = source.size
         except (OSError, UnidentifiedImageError) as error:
             raise HTTPException(422, "source image could not be read") from error
-        normalized = normalize_png(data, expected_dimensions=source_size)
-        return self._write_normalized(relative, normalized, blur)
+        normalized_binary = normalize_png(data, expected_dimensions=source_size)
+        blurred_display = blurred_mask_png(normalized_binary, blur)
+        return self._write_normalized(relative, normalized_binary, blurred_display, blur)
 
     def _write_normalized(
         self,
         relative: Path,
-        normalized: bytes,
+        normalized_binary: bytes,
+        blurred_display: bytes,
         blur: int,
     ) -> dict[str, bool | int | str | None]:
         updated_at = datetime.now(timezone.utc).isoformat()
@@ -82,28 +92,45 @@ class MaskStore:
         with self._lock:
             self._ensure_directory()
             previous_metadata = self._load_metadata(relative)
-            mask_path, metadata_path = self._paths(relative)
+            binary_path, display_path, metadata_path = self._paths(relative)
             try:
-                previous_mask_data = mask_path.read_bytes() if previous_metadata else None
+                previous_binary_data = binary_path.read_bytes() if previous_metadata else None
+                previous_display_data = display_path.read_bytes() if display_path.exists() else None
             except OSError as error:
                 raise HTTPException(500, "mask storage could not be read") from error
-            mask_temp = self._temporary_path(mask_path)
+            binary_temp = self._temporary_path(binary_path)
+            display_temp = self._temporary_path(display_path)
             metadata_temp = self._temporary_path(metadata_path)
-            mask_replaced = False
+            binary_replaced = False
+            display_replaced = False
             try:
-                self._write_file(mask_temp, normalized)
+                self._write_file(binary_temp, normalized_binary)
+                self._write_file(display_temp, blurred_display)
                 self._write_file(metadata_temp, json.dumps(metadata, separators=(",", ":")).encode("utf-8"))
-                os.replace(mask_temp, mask_path)
-                mask_replaced = True
+                os.replace(binary_temp, binary_path)
+                binary_replaced = True
+                os.replace(display_temp, display_path)
+                display_replaced = True
                 os.replace(metadata_temp, metadata_path)
             except OSError as error:
-                self._cleanup_temps(mask_temp, metadata_temp)
-                if mask_replaced:
+                self._cleanup_temps(binary_temp, display_temp, metadata_temp)
+                if display_replaced:
                     try:
-                        if previous_mask_data is None:
-                            mask_path.unlink()
+                        if previous_display_data is None:
+                            display_path.unlink()
                         else:
-                            self._restore_file(mask_path, previous_mask_data)
+                            self._restore_file(display_path, previous_display_data)
+                    except OSError as rollback_error:
+                        raise HTTPException(
+                            500,
+                            "mask storage update failed and could not be rolled back",
+                        ) from rollback_error
+                if binary_replaced:
+                    try:
+                        if previous_binary_data is None:
+                            binary_path.unlink()
+                        else:
+                            self._restore_file(binary_path, previous_binary_data)
                     except OSError as rollback_error:
                         raise HTTPException(
                             500,
@@ -117,16 +144,21 @@ class MaskStore:
             metadata = self._load_metadata(relative)
             if metadata is None:
                 return self._info(relative, None)
-            mask_path, metadata_path = self._paths(relative)
+            binary_path, display_path, metadata_path = self._paths(relative)
             try:
-                mask_data = mask_path.read_bytes()
+                binary_data = binary_path.read_bytes()
+                display_data = display_path.read_bytes() if display_path.exists() else None
                 metadata_data = metadata_path.read_bytes()
-                mask_path.unlink()
+                binary_path.unlink()
+                if display_path.exists():
+                    display_path.unlink()
                 metadata_path.unlink()
             except OSError as error:
                 try:
-                    if not mask_path.exists() and "mask_data" in locals():
-                        self._restore_file(mask_path, mask_data)
+                    if not binary_path.exists() and "binary_data" in locals():
+                        self._restore_file(binary_path, binary_data)
+                    if not display_path.exists() and "display_data" in locals() and display_data is not None:
+                        self._restore_file(display_path, display_data)
                     if not metadata_path.exists() and "metadata_data" in locals():
                         self._restore_file(metadata_path, metadata_data)
                 except OSError as rollback_error:
@@ -137,9 +169,13 @@ class MaskStore:
                 raise HTTPException(500, "mask storage could not be deleted") from error
             return self._info(relative, None)
 
-    def _paths(self, relative: Path) -> tuple[Path, Path]:
+    def _paths(self, relative: Path) -> tuple[Path, Path, Path]:
         digest = hashlib.sha256(relative_text(relative).encode("utf-8")).hexdigest()
-        return self._directory / f"{digest}.png", self._directory / f"{digest}.json"
+        return (
+            self._directory / f"{digest}.png",
+            self._directory / f"{digest}.display.png",
+            self._directory / f"{digest}.json",
+        )
 
     def _ensure_directory(self) -> None:
         if self._directory.is_symlink() or (self._directory.exists() and not self._directory.is_dir()):
@@ -184,16 +220,18 @@ class MaskStore:
                 continue
 
     def _load_metadata(self, relative: Path) -> dict[str, int | str] | None:
-        mask_path, metadata_path = self._paths(relative)
-        if mask_path.is_symlink() or metadata_path.is_symlink():
+        binary_path, display_path, metadata_path = self._paths(relative)
+        if binary_path.is_symlink() or display_path.is_symlink() or metadata_path.is_symlink():
             raise HTTPException(500, "mask storage is invalid")
-        mask_exists = mask_path.exists()
+        mask_exists = binary_path.exists()
         metadata_exists = metadata_path.exists()
         if mask_exists != metadata_exists:
             raise HTTPException(500, "mask storage is inconsistent")
         if not mask_exists:
             return None
-        if not mask_path.is_file() or not metadata_path.is_file():
+        if not binary_path.is_file() or not metadata_path.is_file():
+            raise HTTPException(500, "mask storage is invalid")
+        if display_path.exists() and not display_path.is_file():
             raise HTTPException(500, "mask storage is invalid")
         try:
             loaded = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -266,8 +304,26 @@ def normalize_png(
                     raise HTTPException(422, "mask dimensions must not exceed 2048 pixels")
                 image.load()
                 rgba = image.convert("RGBA")
+                alpha = rgba.getchannel("A").point(lambda value: 255 if value >= 128 else 0, mode="L")
+                binary_rgba = Image.new("RGBA", rgba.size, (255, 255, 255, 0))
+                binary_rgba.putalpha(alpha)
                 output = BytesIO()
-                rgba.save(output, format="PNG")
+                binary_rgba.save(output, format="PNG")
                 return output.getvalue()
     except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
         raise HTTPException(422, "mask body must be a valid PNG") from error
+
+
+def blurred_mask_png(binary_png: bytes, blur: int) -> bytes:
+    try:
+        with Image.open(BytesIO(binary_png)) as image:
+            rgba = image.convert("RGBA")
+    except (UnidentifiedImageError, OSError, SyntaxError) as error:
+        raise HTTPException(500, "mask storage is invalid") from error
+    alpha = rgba.getchannel("A")
+    blurred_alpha = alpha if blur <= 0 else alpha.filter(ImageFilter.GaussianBlur(blur))
+    blurred_rgba = Image.new("RGBA", rgba.size, (255, 255, 255, 0))
+    blurred_rgba.putalpha(blurred_alpha)
+    output = BytesIO()
+    blurred_rgba.save(output, format="PNG")
+    return output.getvalue()

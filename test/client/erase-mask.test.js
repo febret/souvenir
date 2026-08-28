@@ -167,23 +167,24 @@ describe("erase mask helpers", () => {
     expect(alpha(binary, 2, 0)).toBe(255);
   });
 
-  it("feathers only outside the binary mask while preserving full erase opacity inside", () => {
+  it("maps erase alpha directly to inverse display opacity", () => {
     const canvas = createEraseMaskCanvas(9, 9);
-    paintEraseStroke(canvas, { x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, 0.01);
+    const context = canvas.getContext("2d");
+    context.data[(4 * canvas.width + 4) * 4 + 3] = 255;
+    context.data[(4 * canvas.width + 3) * 4 + 3] = 128;
     const opacity = opacityMapCanvas(canvas, 1);
     expect(pixel(opacity, 4, 4)).toBe(0);
-    expect(pixel(opacity, 3, 4)).toBeGreaterThan(0);
-    expect(pixel(opacity, 3, 4)).toBeLessThan(255);
+    expect(pixel(opacity, 3, 4)).toBe(127);
     expect(pixel(opacity, 0, 0)).toBe(255);
   });
 
-  it("thresholds partial source alpha before applying whole-mask edge blur", () => {
+  it("does not threshold partial source alpha", () => {
     const canvas = createEraseMaskCanvas(3, 1);
     const context = canvas.getContext("2d");
     context.data[3] = 127;
     context.data[7] = 128;
     const opacity = opacityMapCanvas(canvas);
-    expect(pixel(opacity, 0, 0)).toBe(255);
-    expect(pixel(opacity, 1, 0)).toBe(0);
+    expect(pixel(opacity, 0, 0)).toBe(128);
+    expect(pixel(opacity, 1, 0)).toBe(127);
   });
 });

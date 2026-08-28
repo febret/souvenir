@@ -5,6 +5,8 @@ export const TAG_SORT_ORDERS = Object.freeze({
   ALPHA_DESC: "alpha-desc",
 });
 
+export const POWER_OF_TWO_RESOLUTIONS = Object.freeze([64, 128, 256, 512, 1024, 2048]);
+
 export const DEFAULT_SETTINGS = Object.freeze({
   version: SETTINGS_VERSION,
   mediaDirectories: [],
@@ -27,8 +29,21 @@ const CAPTION_RANGES = Object.freeze({
 });
 const ADM_RANGES = Object.freeze({
   admDefaultDepthIntensity: [0, 3],
-  admMaxResolution: [64, 512],
+  admMaxResolution: [64, 2048],
 });
+
+export function normalizePowerOfTwoResolution(value, fallback = DEFAULT_SETTINGS.admMaxResolution) {
+  const candidate = Number.isFinite(value) ? Number(value) : fallback;
+  if (!Number.isFinite(candidate)) return fallback;
+  const clamped = Math.min(ADM_RANGES.admMaxResolution[1], Math.max(ADM_RANGES.admMaxResolution[0], candidate));
+  const exponent = Math.round(Math.log2(clamped));
+  const rounded = 2 ** exponent;
+  return POWER_OF_TWO_RESOLUTIONS.reduce((nearest, option) => {
+    const delta = Math.abs(option - rounded);
+    const currentDelta = Math.abs(nearest - rounded);
+    return delta < currentDelta ? option : nearest;
+  }, POWER_OF_TWO_RESOLUTIONS[0]);
+}
 
 function cloneDefaults() {
   return { ...DEFAULT_SETTINGS, mediaDirectories: [] };
@@ -119,7 +134,7 @@ export function reconcileSettings(value, availableDirectories) {
     captionTransparency: captionSetting("captionTransparency"),
     captionDistance: captionSetting("captionDistance"),
     admDefaultDepthIntensity: Math.round(admSetting("admDefaultDepthIntensity") * 100) / 100,
-    admMaxResolution: Math.round(admSetting("admMaxResolution")),
+    admMaxResolution: normalizePowerOfTwoResolution(admSetting("admMaxResolution")),
   };
 }
 

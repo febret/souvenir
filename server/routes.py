@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+from io import BytesIO
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Literal
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from PIL import Image, UnidentifiedImageError
 
 from .auto_depth import AutoDepthGenerator, AutoDepthService
 from .auto_mask import AutoMaskGenerator, AutoMaskService
@@ -19,6 +21,14 @@ from .tags import DEFAULT_ADM_DEPTH_INTENSITY, TagStore
 from .thumbnails import create_thumbnail
 
 _RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
+MAX_UPLOAD_IMAGE_BYTES = 64 * 1024 * 1024
+MAX_UPLOAD_IMAGE_DIMENSION = 16384
+_SUPPORTED_UPLOAD_IMAGE_FORMATS: dict[str, tuple[str, str]] = {
+    "JPEG": ("image/jpeg", ".jpg"),
+    "PNG": ("image/png", ".png"),
+    "WEBP": ("image/webp", ".webp"),
+    "GIF": ("image/gif", ".gif"),
+}
 
 
 def _included(root: Path, include: list[str], included_dirs: list[str]) -> tuple[Path, ...]:
@@ -105,6 +115,7 @@ def add_routes(
     root: Path,
     commentary_root: Path | None = None,
     *,
+    upload_root: Path,
     auto_mask_generator: AutoMaskGenerator | None = None,
     auto_depth_generator: AutoDepthGenerator | None = None,
 ) -> None:
@@ -151,10 +162,54 @@ def add_routes(
             setting = adm_settings.get(entry["path"])
             entry["adm"] = {
                 "configured": isinstance(setting, dict),
-                "enabled": bool(setting["enabled"]) if isinstance(setting, dict) else False,
-                "depth_intensity": float(setting["depth_intensity"]) if isinstance(setting, dict) else DEFAULT_ADM_DEPTH_INTENSITY,
+                "enabled": bool(setting.get("enabled", False)) if isinstance(setting, dict) else False,
+                "depth_intensity": float(setting.get("depth_intensity", DEFAULT_ADM_DEPTH_INTENSITY)) if isinstance(setting, dict) else DEFAULT_ADM_DEPTH_INTENSITY,
+                "soft_depth_enabled": bool(setting.get("soft_depth_enabled", False)) if isinstance(setting, dict) else False,
+                "soft_depth_blur": float(setting.get("soft_depth_blur", 12)) if isinstance(setting, dict) else 12,
+                "fade_depth_enabled": bool(setting.get("fade_depth_enabled", False)) if isinstance(setting, dict) else False,
+                "fade_depth_start": float(setting.get("fade_depth_start", 0.5)) if isinstance(setting, dict) else 0.5,
+                "focus_blur_enabled": bool(setting.get("focus_blur_enabled", False)) if isinstance(setting, dict) else False,
+                "focus_position": str(setting.get("focus_position", "middle")) if isinstance(setting, dict) else "middle",
+                "focus_strength": str(setting.get("focus_strength", "middle")) if isinstance(setting, dict) else "middle",
+                "light_fx_enabled": bool(setting.get("light_fx_enabled", False)) if isinstance(setting, dict) else False,
+                "light_direction": str(setting.get("light_direction", "front")) if isinstance(setting, dict) else "front",
+                "light_color": str(setting.get("light_color", "white")) if isinstance(setting, dict) else "white",
+                "ambient_color": str(setting.get("ambient_color", "white")) if isinstance(setting, dict) else "white",
+                "ambient_intensity": float(setting.get("ambient_intensity", 0.5)) if isinstance(setting, dict) else 0.5,
             }
         return {"path": relative_text(relative), "entries": entries, "directories": [entry for entry in entries if entry["kind"] == "directory"], "files": [entry for entry in entries if entry["kind"] == "file"]}
+
+    @app.post("/api/uploads", status_code=201)
+    async def upload_images(files: list[UploadFile] = File(default=[])) -> Response:
+        if not files:
+            raise HTTPException(422, "at least one image file is required")
+        if is_internal_path(upload_root.relative_to(root)):
+            raise HTTPException(500, "upload path is invalid")
+        uploads: list[tuple[str, str, bytes]] = [await _read_upload_image(file) for file in files]
+        try:
+            upload_root.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            raise HTTPException(500, "upload directory is unavailable") from error
+        if not upload_root.is_dir():
+            raise HTTPException(500, "upload directory is unavailable")
+        created: list[Path] = []
+        try:
+            for stem, suffix, payload in uploads:
+                created.append(_write_unique_upload(upload_root, stem=stem, suffix=suffix, payload=payload))
+        except OSError as error:
+            for created_path in created:
+                try:
+                    created_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise HTTPException(500, "upload failed while saving files") from error
+        return _no_store(
+            {
+                "directory": relative_text(upload_root.relative_to(root)),
+                "entries": [metadata(root, path) for path in created],
+            },
+            status_code=201,
+        )
 
     @app.get("/api/tags")
     def list_tags():
@@ -198,12 +253,44 @@ def add_routes(
     async def put_media_adm(path: str, request: Request):
         relative = _image_relative(root, path)
         body = await _json_object(request)
-        _require_exact_keys(body, {"enabled", "depth_intensity"})
+        accepted = {
+            "enabled",
+            "depth_intensity",
+            "soft_depth_enabled",
+            "soft_depth_blur",
+            "fade_depth_enabled",
+            "fade_depth_start",
+            "focus_blur_enabled",
+            "focus_position",
+            "focus_strength",
+            "light_fx_enabled",
+            "light_direction",
+            "light_color",
+            "ambient_color",
+            "ambient_intensity",
+        }
+        if not isinstance(body, dict) or not set(body).issubset(accepted):
+            raise HTTPException(422, "invalid ADM payload")
+        required = {"enabled", "depth_intensity"}
+        if not required.issubset(set(body)):
+            raise HTTPException(422, "ADM payload must include enabled and depth_intensity")
         return _no_store(
             tags.replace_media_adm_setting(
                 relative,
-                enabled=body["enabled"],
-                depth_intensity=body["depth_intensity"],
+                enabled=body.get("enabled"),
+                depth_intensity=body.get("depth_intensity"),
+                soft_depth_enabled=body.get("soft_depth_enabled", False),
+                soft_depth_blur=body.get("soft_depth_blur", 12),
+                fade_depth_enabled=body.get("fade_depth_enabled", False),
+                fade_depth_start=body.get("fade_depth_start", 0.5),
+                focus_blur_enabled=body.get("focus_blur_enabled", False),
+                focus_position=body.get("focus_position", "middle"),
+                focus_strength=body.get("focus_strength", "middle"),
+                light_fx_enabled=body.get("light_fx_enabled", False),
+                light_direction=body.get("light_direction", "front"),
+                light_color=body.get("light_color", "white"),
+                ambient_color=body.get("ambient_color", "white"),
+                ambient_intensity=body.get("ambient_intensity", 0.5),
             )
         )
 
@@ -341,9 +428,9 @@ def add_routes(
         )
 
     @app.get("/api/mask")
-    def get_mask(path: str):
+    def get_mask(path: str, variant: Literal["display", "binary"] = "display"):
         relative = masks.media_relative(path)
-        return Response(content=masks.read(relative), media_type="image/png", headers={"Cache-Control": "no-store"})
+        return Response(content=masks.read(relative, variant=variant), media_type="image/png", headers={"Cache-Control": "no-store"})
 
     @app.put("/api/mask")
     async def put_mask(path: str, request: Request, blur: int = Query(default=0, ge=0, le=64)):
@@ -370,9 +457,12 @@ def add_routes(
         return masks.delete(relative)
 
     @app.post("/api/mask/auto")
-    def request_auto_mask(path: str):
+    def request_auto_mask(
+        path: str,
+        max_resolution: int = Query(default=512, ge=64, le=2048),
+    ):
         relative = _image_relative(root, path)
-        return _no_store(auto_masks.request(relative))
+        return _no_store(auto_masks.request(relative, max_dimension=max_resolution))
 
     @app.get("/api/mask/auto")
     def auto_mask_status(path: str):
@@ -425,7 +515,7 @@ def add_routes(
     @app.post("/api/depth/auto")
     def request_auto_depth(
         path: str,
-        max_resolution: int = Query(default=512, ge=64, le=512),
+        max_resolution: int = Query(default=512, ge=64, le=2048),
     ):
         relative = _image_relative(root, path)
         return _no_store(auto_depth.request(relative, max_dimension=max_resolution))
@@ -443,7 +533,7 @@ def add_routes(
     @app.post("/api/adm/auto")
     def request_adm(
         path: str,
-        max_resolution: int = Query(default=512, ge=64, le=512),
+        max_resolution: int = Query(default=512, ge=64, le=2048),
     ):
         relative = _image_relative(root, path)
         return _no_store(
@@ -462,7 +552,7 @@ def add_routes(
     @app.delete("/api/adm/auto")
     def cancel_adm(path: str):
         relative = _image_relative(root, path)
-        mask = auto_masks.cancel(relative)
+        mask = auto_masks.status(relative)
         depth = auto_depth.cancel(relative)
         return _no_store(_combined_adm_snapshot(relative, mask, depth))
 
@@ -472,9 +562,8 @@ def add_routes(
         request_missing: bool,
         max_resolution: int = 512,
     ) -> dict[str, object]:
-        mask_info = masks.info(relative)
         depth_info = depth_maps.info(relative)
-        mask_state = auto_masks.request(relative) if request_missing and not mask_info["exists"] else auto_masks.status(relative)
+        mask_state = auto_masks.status(relative)
         depth_state = (
             auto_depth.request(relative, max_dimension=max_resolution)
             if request_missing and not depth_info["exists"]
@@ -483,16 +572,16 @@ def add_routes(
         return _combined_adm_snapshot(relative, mask_state, depth_state)
 
     def _combined_adm_snapshot(relative: Path, mask_state: dict[str, object], depth_state: dict[str, object]) -> dict[str, object]:
-        statuses = [str(mask_state.get("status", "idle")), str(depth_state.get("status", "idle"))]
-        if "failed" in statuses:
+        depth_status = str(depth_state.get("status", "idle"))
+        if depth_status == "failed":
             status = "failed"
-        elif "running" in statuses:
+        elif depth_status == "running":
             status = "running"
-        elif "queued" in statuses:
+        elif depth_status == "queued":
             status = "queued"
-        elif "cancelled" in statuses:
+        elif depth_status == "cancelled":
             status = "cancelled"
-        elif bool(mask_state.get("mask", {}).get("exists")) and bool(depth_state.get("depth", {}).get("exists")):
+        elif bool(depth_state.get("depth", {}).get("exists")):
             status = "completed"
         else:
             status = "idle"
@@ -524,6 +613,63 @@ async def _read_depth_body(request: Request) -> bytes:
             raise HTTPException(413, "depth body is too large")
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+async def _read_upload_image(file: UploadFile) -> tuple[str, str, bytes]:
+    content_type_header = (file.content_type or "").split(";", 1)[0].strip().lower()
+    if not content_type_header.startswith("image/"):
+        raise HTTPException(415, "upload content type must be image/*")
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(422, "uploaded image is empty")
+    if len(payload) > MAX_UPLOAD_IMAGE_BYTES:
+        raise HTTPException(413, "uploaded image is too large")
+    try:
+        with Image.open(BytesIO(payload)) as image:
+            if image.width <= 0 or image.height <= 0:
+                raise HTTPException(422, "uploaded image has invalid dimensions")
+            if image.width > MAX_UPLOAD_IMAGE_DIMENSION or image.height > MAX_UPLOAD_IMAGE_DIMENSION:
+                raise HTTPException(413, "uploaded image dimensions are too large")
+            image_format = image.format
+    except HTTPException:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError):
+        raise HTTPException(415, "unsupported uploaded image format") from None
+    if image_format not in _SUPPORTED_UPLOAD_IMAGE_FORMATS:
+        raise HTTPException(415, "unsupported uploaded image format")
+    _, canonical_suffix = _SUPPORTED_UPLOAD_IMAGE_FORMATS[image_format]
+    stem, suffix = _upload_stem_and_suffix_from_name(file.filename, fallback_suffix=canonical_suffix)
+    if media_type(Path(f"x{suffix}")) != _SUPPORTED_UPLOAD_IMAGE_FORMATS[image_format][0]:
+        suffix = canonical_suffix
+    return stem, suffix, payload
+
+
+def _upload_stem_and_suffix_from_name(filename: str | None, *, fallback_suffix: str) -> tuple[str, str]:
+    name = "" if filename is None else Path(filename).name.strip()
+    if not name:
+        raise HTTPException(422, "uploaded image must have a filename")
+    candidate = Path(name)
+    stem = candidate.stem.strip() if candidate.suffix else name
+    stem = stem.rstrip(".")
+    if not stem:
+        stem = "image"
+    suffix = candidate.suffix.lower() if candidate.suffix else fallback_suffix
+    if suffix and media_type(Path(f"x{suffix}")) is None:
+        suffix = fallback_suffix
+    return stem, suffix
+
+
+def _write_unique_upload(destination_root: Path, *, stem: str, suffix: str, payload: bytes) -> Path:
+    index = 1
+    while True:
+        filename = f"{stem}{suffix}" if index == 1 else f"{stem} ({index}){suffix}"
+        destination = destination_root / filename
+        try:
+            with destination.open("xb") as handle:
+                handle.write(payload)
+            return destination
+        except FileExistsError:
+            index += 1
 
 
 def _reject_internal_path(relative: Path) -> None:

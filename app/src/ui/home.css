@@ -1980,7 +1980,7 @@ footer {
   .title-bar .launch-actions {
     display: grid;
     width: 100%;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 6px;
   }
 
@@ -2137,3 +2137,81 @@ footer {
     height: 58px;
   }
 }
+
+  /* Compact 2D window styling: minimize whitespace and increase button readability. */
+  .setting-card,
+  .launch-card,
+  .inline-state,
+  .library-progress,
+  .tag-row,
+  .commentary-filter,
+  .caption-setting,
+  .commentary-editor-panel,
+  .commentary-suggest-panel,
+  .browse-shell,
+  .browse-title-bar,
+  .browse-breadcrumbs,
+  .browse-toolbar,
+  .browse-tags,
+  .browse-viewer,
+  .browse-viewer-bar {
+    padding: 4px !important;
+  }
+
+  .section-heading,
+  .section-actions,
+  .tag-add-row,
+  .tag-sort-row,
+  .tag-actions,
+  .commentary-suggest-row,
+  .caption-settings,
+  .commentary-caption-actions,
+  .browse-workspace,
+  .browse-image-controls,
+  .launch-actions {
+    gap: 4px !important;
+  }
+
+  .playback-scenes,
+  .toggle-row,
+  .tag-state,
+  .tag-error,
+  .commentary-error,
+  .commentary-filter,
+  .caption-settings,
+  .commentary-list,
+  .commentary-suggest-summary,
+  .commentary-suggest-list,
+  .commentary-suggest-distribution,
+  .app-error {
+    margin: 4px 0 0 !important;
+  }
+
+  .primary-button,
+  .secondary-button,
+  .compact-button,
+  .tag-action,
+  .commentary-filter-button,
+  .text-button {
+    padding: 0 4px !important;
+    font-size: 1rem !important;
+    line-height: 1.05;
+  }
+
+  .primary-button,
+  .secondary-button,
+  .compact-button,
+  .tag-action {
+    min-height: 40px !important;
+  }
+
+  .playback-scenes .scene-controls input,
+  .playback-scenes .scene-controls select,
+  .tag-add-row input,
+  .tag-edit-input,
+  .tag-sort-row select,
+  .commentary-caption-input,
+  .commentary-tag-picker summary,
+  .commentary-caption-editor summary {
+    padding: 4px !important;
+  }

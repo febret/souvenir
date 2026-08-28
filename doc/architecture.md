@@ -153,6 +153,7 @@ identifiers.
 | `GET /api/library-status` | First-load scan progress plus `library_id` |
 | `GET /api/tree` | Recursive directory metadata |
 | `GET /api/media?path=` | One directory's child directories and media entries |
+| `POST /api/uploads` | Validate and store one or more uploaded images under `<media_home>/<upload_dirname>` |
 | `GET, HEAD /api/file?path=` | Full or single-range media streaming |
 | `GET /api/thumbnail?path=` | Cached JPEG image thumbnail or video placeholder |
 | `GET /api/mask-info?path=` | No-store mask presence, blur, timestamp, and URL |
@@ -171,6 +172,10 @@ identifiers.
 
 Video seeking depends on byte-range responses. Valid ranges return `206` with
 `Content-Range`; invalid ranges return `416`.
+
+`upload_dirname` defaults to `uploads` and is configurable with
+`SOUVENIR_UPLOAD_DIRNAME`. Uploads remain inside `SOUVENIR_MEDIA_HOME` and then
+flow through normal media listing/file/thumbnail APIs.
 
 ### Thumbnails and masks
 

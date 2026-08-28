@@ -360,7 +360,20 @@ test("prompts and enables ADM with generated depth data", async ({ page }) => {
   }, panelId);
   expect(minimumMeshDepth).toBeGreaterThan(0);
   const uiDepths = await page.evaluate((id) => {
-    const view = window.__souvenirApp.panelViews.get(id);
+    const app = window.__souvenirApp;
+    const view = app.panelViews.get(id);
+    // In desktop overlay mode, controls/optionsPanel are in the overlayScene and
+    // always drawn in front via clearDepth(); depth-value comparison doesn't apply.
+    if (view?.overlayScene) {
+      return {
+        overlayMode: true,
+        controlsInOverlay: app.desktopOverlayScene?.children.includes(view.controls) ?? false,
+        optionsInOverlay: app.desktopOverlayScene?.children.includes(view.optionsPanel) ?? false,
+        maximumSurfaceDepth: null,
+        controlDepth: null,
+        optionsDepth: null,
+      };
+    }
     const positions = Array.from(view?.surface.geometry.attributes.position.array ?? []);
     const surfaceDepths = positions.filter((_, index) => index % 3 === 2);
     const maximumSurfaceDepth = Math.max(...surfaceDepths);
@@ -369,10 +382,15 @@ test("prompts and enables ADM with generated depth data", async ({ page }) => {
     );
     const optionsBackdrop = view.optionsPanel.children[0];
     const optionsDepth = view.optionsPanel.position.z + (optionsBackdrop?.position?.z ?? 0);
-    return { maximumSurfaceDepth, controlDepth, optionsDepth };
+    return { overlayMode: false, maximumSurfaceDepth, controlDepth, optionsDepth };
   }, panelId);
-  expect(uiDepths.controlDepth).toBeGreaterThan(uiDepths.maximumSurfaceDepth);
-  expect(uiDepths.optionsDepth).toBeGreaterThan(uiDepths.maximumSurfaceDepth);
+  if (uiDepths.overlayMode) {
+    expect(uiDepths.controlsInOverlay).toBe(true);
+    expect(uiDepths.optionsInOverlay).toBe(true);
+  } else {
+    expect(uiDepths.controlDepth).toBeGreaterThan(uiDepths.maximumSurfaceDepth);
+    expect(uiDepths.optionsDepth).toBeGreaterThan(uiDepths.maximumSurfaceDepth);
+  }
 
   const secondPanelId = await page.evaluate(() => {
     const app = window.__souvenirApp;
@@ -434,7 +452,18 @@ test("keeps panel UI and options in front of displaced 3D depth", async ({ page 
   }, panelId)).toEqual({ enabled: true, meshDisplaced: true });
 
   const uiDepths = await page.evaluate((id) => {
-    const view = window.__souvenirApp.panelViews.get(id);
+    const app = window.__souvenirApp;
+    const view = app.panelViews.get(id);
+    if (view?.overlayScene) {
+      return {
+        overlayMode: true,
+        controlsInOverlay: app.desktopOverlayScene?.children.includes(view.controls) ?? false,
+        optionsInOverlay: app.desktopOverlayScene?.children.includes(view.optionsPanel) ?? false,
+        maximumSurfaceDepth: null,
+        controlDepth: null,
+        optionsDepth: null,
+      };
+    }
     const depthValues = Array.from(view?.surface.geometry.attributes.position.array ?? [])
       .filter((_, index) => index % 3 === 2);
     const maximumSurfaceDepth = Math.max(...depthValues);
@@ -443,11 +472,68 @@ test("keeps panel UI and options in front of displaced 3D depth", async ({ page 
     );
     const optionsBackdrop = view.optionsPanel.children[0];
     const optionsDepth = view.optionsPanel.position.z + (optionsBackdrop?.position?.z ?? 0);
-    return { maximumSurfaceDepth, controlDepth, optionsDepth };
+    return { overlayMode: false, maximumSurfaceDepth, controlDepth, optionsDepth };
   }, panelId);
 
-  expect(uiDepths.controlDepth).toBeGreaterThan(uiDepths.maximumSurfaceDepth);
-  expect(uiDepths.optionsDepth).toBeGreaterThan(uiDepths.maximumSurfaceDepth);
+  if (uiDepths.overlayMode) {
+    expect(uiDepths.controlsInOverlay).toBe(true);
+    expect(uiDepths.optionsInOverlay).toBe(true);
+  } else {
+    expect(uiDepths.controlDepth).toBeGreaterThan(uiDepths.maximumSurfaceDepth);
+    expect(uiDepths.optionsDepth).toBeGreaterThan(uiDepths.maximumSurfaceDepth);
+  }
+});
+
+test("collapses and expands the panel tag list without hiding the options panel", async ({ page }) => {
+  await page.goto("/?debug=1");
+  await page.locator('.directory-row input[value="albums"]').check();
+  await page.locator("#preview-button").click();
+  await expect(page.locator("#scene-shell")).toBeVisible();
+
+  const panelId = await page.evaluate(() => window.__souvenirApp.store.getState().focusedId);
+  await selectBeachImage(page, panelId);
+  await page.evaluate((id) => {
+    const view = window.__souvenirApp.panelViews.get(id);
+    view.setTagDefinitions([
+      { id: "tag-1", name: "Sunrise" },
+      { id: "tag-2", name: "Forest" },
+      { id: "tag-3", name: "Ocean" },
+      { id: "tag-4", name: "Clouds" },
+    ]);
+  }, panelId);
+  await clickSceneObject(page, { action: "toggle-options", panelId });
+  await expect.poll(() => page.evaluate((id) => {
+    const view = window.__souvenirApp.panelViews.get(id);
+    const tagButtons = view?.optionsPanel.content.children.filter((child) => child.userData?.action?.startsWith("toggle-media-tag:"));
+    return {
+      visible: view?.optionsPanel.visible,
+      tagCount: tagButtons?.length ?? 0,
+      expanded: view?.tagListExpanded,
+      offsetX: tagButtons?.[0]?.position?.x ?? null,
+    };
+  }, panelId)).toMatchObject({ visible: true, expanded: true, offsetX: expect.any(Number) });
+
+  await clickSceneObject(page, { action: "toggle-tag-list", panelId });
+  await expect.poll(() => page.evaluate((id) => {
+    const view = window.__souvenirApp.panelViews.get(id);
+    const tagButtons = view?.optionsPanel.content.children.filter((child) => child.userData?.action?.startsWith("toggle-media-tag:"));
+    return {
+      tagCount: tagButtons?.length ?? 0,
+      expanded: view?.tagListExpanded,
+      offsetX: tagButtons?.[0]?.position?.x ?? null,
+    };
+  }, panelId)).toEqual({ tagCount: 0, expanded: false, offsetX: null });
+
+  await clickSceneObject(page, { action: "toggle-tag-list", panelId });
+  await expect.poll(() => page.evaluate((id) => {
+    const view = window.__souvenirApp.panelViews.get(id);
+    const tagButtons = view?.optionsPanel.content.children.filter((child) => child.userData?.action?.startsWith("toggle-media-tag:"));
+    return {
+      tagCount: tagButtons?.length ?? 0,
+      expanded: view?.tagListExpanded,
+      offsetX: tagButtons?.[0]?.position?.x ?? null,
+    };
+  }, panelId)).toMatchObject({ tagCount: expect.any(Number), expanded: true, offsetX: expect.any(Number) });
 });
 
 test("applies absolute two-hand panel and browser gestures without moving controls", async ({

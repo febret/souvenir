@@ -47,6 +47,7 @@ export class SpatialApp {
   #initializeScene() {
     this.scene = new THREE.Scene();
     this.scene.background = null;
+    this.desktopOverlayScene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.01, 100);
     this.camera.position.set(0, 1.45, 1.35);
     this.renderer = new THREE.WebGLRenderer({
@@ -140,8 +141,9 @@ export class SpatialApp {
       renderer: this.renderer,
       camera: this.camera,
       scene: this.scene,
+      overlayScene: this.desktopOverlayScene,
       canvas: this.canvas,
-      onActivate: (hit) => this.#activate(hit),
+      onActivate: (hit, context) => this.#activate(hit, context),
       onGesture: (target, gesture) => this.panelCoordinator.applyGesture(target, gesture),
       onFocus: (target) => this.panelCoordinator.focus(target),
     });
@@ -189,6 +191,9 @@ export class SpatialApp {
     }
 
     this.interactions.setRayVisible(!this.zenMode);
+    if (!immersive) {
+      this.panelCoordinator.setOverlayScene(this.desktopOverlayScene);
+    }
     this.renderer.setAnimationLoop((time) => this.#render(time));
   }
 
@@ -322,7 +327,7 @@ export class SpatialApp {
     return this.scenePlayback.captureOrDeleteShot();
   }
 
-  #activate(hit) {
+  #activate(hit, context = null) {
     const { object, uv } = hit;
     const { kind, action, panelId } = object.userData;
     if (kind === "button") {
@@ -342,7 +347,7 @@ export class SpatialApp {
       return;
     }
     if (kind === "panel-surface" || kind === "panel-frame") {
-      this.panelViews.get(panelId)?.activateSurface(uv);
+      this.panelViews.get(panelId)?.activateSurface(uv, context);
     }
   }
 
@@ -385,14 +390,18 @@ export class SpatialApp {
   #render(time) {
     this.controls.update();
     this.interactions.update();
-    this.scenePlayback.advancePlayback(time);
-    this.panelCoordinator.tick(time);
-    this.scenePlayback.updateTransition(time);
     const viewCamera = this.renderer.xr.isPresenting
       ? this.renderer.xr.getCamera(this.camera)
       : this.camera;
+    this.scenePlayback.advancePlayback(time);
+    this.panelCoordinator.tick(time, viewCamera);
+    this.scenePlayback.updateTransition(time);
     this.commentary.update(viewCamera);
     this.environmentEffects.render(this.renderer, this.scene, this.camera, time);
+    if (!this.immersive) {
+      this.renderer.clearDepth();
+      this.renderer.render(this.desktopOverlayScene, this.camera);
+    }
   }
 
   #resize() {

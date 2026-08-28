@@ -76,22 +76,54 @@ describe("MediaApi errors", () => {
       }));
     });
 
-    it("passes the configured resolution to ADM generation", async () => {
-      const fetch = vi.fn().mockResolvedValue(new Response(
-        JSON.stringify({ status: "queued" }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ));
+    it("passes the configured resolution to auto mask and ADM generation", async () => {
+      const fetch = vi.fn()
+        .mockResolvedValueOnce(new Response(
+          JSON.stringify({ status: "queued" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ))
+        .mockResolvedValueOnce(new Response(
+          JSON.stringify({ status: "queued" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ));
       vi.stubGlobal("fetch", fetch);
       vi.stubGlobal("window", { location: { origin: "https://souvenir.test" } });
 
+      await new MediaApi().requestAutoMask("albums/photo.jpg", 256);
       await new MediaApi().requestAdm("albums/photo.jpg", 192);
 
+      const [maskUrl, maskOptions] = fetch.mock.calls[0];
+      expect(maskUrl).toBeInstanceOf(URL);
+      expect(maskUrl.pathname).toBe("/api/mask/auto");
+      expect(maskUrl.searchParams.get("path")).toBe("albums/photo.jpg");
+      expect(maskUrl.searchParams.get("max_resolution")).toBe("256");
+      expect(maskOptions).toEqual(expect.objectContaining({ method: "POST", cache: "no-store" }));
+
+      const [admUrl, admOptions] = fetch.mock.calls[1];
+      expect(admUrl).toBeInstanceOf(URL);
+      expect(admUrl.pathname).toBe("/api/adm/auto");
+      expect(admUrl.searchParams.get("path")).toBe("albums/photo.jpg");
+      expect(admUrl.searchParams.get("max_resolution")).toBe("192");
+      expect(admOptions).toEqual(expect.objectContaining({ method: "POST", cache: "no-store" }));
+    });
+
+    it("uploads selected images through multipart form data", async () => {
+      const fetch = vi.fn().mockResolvedValue(new Response(
+        JSON.stringify({ entries: [{ path: "uploads/new.jpg" }] }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ));
+      vi.stubGlobal("fetch", fetch);
+      const file = new File([new Uint8Array([1, 2, 3])], "new.jpg", { type: "image/jpeg" });
+
+      await expect(new MediaApi().uploadImages([file])).resolves.toEqual({
+        entries: [{ path: "uploads/new.jpg" }],
+      });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
       const [url, options] = fetch.mock.calls[0];
-      expect(url).toBeInstanceOf(URL);
-      expect(url.pathname).toBe("/api/adm/auto");
-      expect(url.searchParams.get("path")).toBe("albums/photo.jpg");
-      expect(url.searchParams.get("max_resolution")).toBe("192");
+      expect(url).toBe("/api/uploads");
       expect(options).toEqual(expect.objectContaining({ method: "POST", cache: "no-store" }));
+      expect(options.body).toBeInstanceOf(FormData);
     });
   });
 

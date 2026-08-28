@@ -1005,11 +1005,11 @@ test("controls panels, browser, navigation, transforms, slideshow and restore", 
   await clickSceneObject(page, { action: "browser-view" });
   await expect.poll(() =>
     page.evaluate(() => window.__souvenirApp.browser.viewMode),
-  ).toBe("thumbnails");
+  ).toBe("large");
   await clickSceneObject(page, { action: "browser-view" });
   await expect.poll(() =>
     page.evaluate(() => window.__souvenirApp.browser.viewMode),
-  ).toBe("large");
+  ).toBe("names");
   await clickSceneObject(page, { action: "browser-page-next" });
   await expect.poll(() =>
     page.evaluate(() => window.__souvenirApp.browser.page),

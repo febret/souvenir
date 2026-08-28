@@ -40,4 +40,40 @@ describe("PanelCoordinator", () => {
       expect(coordinator.isTagSavePending(panel.id)).toBe(false);
     });
   });
+
+  it("flushes ADM settings when closing options", () => {
+    const panel = { id: "panel-1", media: { selectedId: "photo.jpg" } };
+    const flushAdmSettingsForPanel = vi.fn();
+    const coordinator = Object.assign(Object.create(PanelCoordinator.prototype), {
+      panelState: { panels: [panel], focusedId: panel.id },
+      store: { focus: vi.fn() },
+      panelViews: new Map([[
+        panel.id,
+        { toggleOptions: vi.fn(() => false) },
+      ]]),
+      maskWorkflow: { flushAdmSettingsForPanel },
+    });
+
+    coordinator.handleAction(panel.id, "toggle-options");
+
+    expect(flushAdmSettingsForPanel).toHaveBeenCalledTimes(1);
+    expect(flushAdmSettingsForPanel).toHaveBeenCalledWith(panel.id);
+  });
+
+  it("routes delete-depth action to the mask workflow", () => {
+    const panel = { id: "panel-1", media: { selectedId: "photo.jpg" } };
+    const deleteDepth = vi.fn().mockResolvedValue();
+    const coordinator = Object.assign(Object.create(PanelCoordinator.prototype), {
+      panelState: { panels: [panel], focusedId: panel.id },
+      store: { focus: vi.fn() },
+      panelViews: new Map(),
+      maskWorkflow: { deleteDepth },
+      onError: vi.fn(),
+    });
+
+    coordinator.handleAction(panel.id, "delete-depth-mask");
+
+    expect(deleteDepth).toHaveBeenCalledTimes(1);
+    expect(deleteDepth).toHaveBeenCalledWith(panel);
+  });
 });

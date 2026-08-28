@@ -1,13 +1,18 @@
 from PIL import Image
 
-from server.auto_depth import MAX_AUTO_DEPTH_DIMENSION, _prepare_depth_input
+from server.auto_depth import (
+    DEFAULT_AUTO_DEPTH_DIMENSION,
+    MAX_AUTO_DEPTH_DIMENSION,
+    _prepare_depth_input,
+)
 
 
-def test_depth_input_downscales_long_edge_to_512_without_changing_aspect_ratio():
-    landscape = _prepare_depth_input(Image.new("RGB", (1600, 900)))
-    portrait = _prepare_depth_input(Image.new("RGB", (900, 1600)))
+def test_depth_input_downscales_long_edge_to_max_dimension_without_changing_aspect_ratio():
+    landscape = _prepare_depth_input(Image.new("RGB", (6400, 3600)))
+    portrait = _prepare_depth_input(Image.new("RGB", (3600, 6400)))
 
-    assert MAX_AUTO_DEPTH_DIMENSION == 512
+    assert DEFAULT_AUTO_DEPTH_DIMENSION == 512
+    assert MAX_AUTO_DEPTH_DIMENSION == 2048
     assert landscape.size == (512, 288)
     assert portrait.size == (288, 512)
 
@@ -28,3 +33,12 @@ def test_depth_input_uses_requested_maximum_dimension():
     )
 
     assert prepared.size == (192, 108)
+
+
+def test_depth_input_supports_explicit_larger_requested_dimension():
+    prepared = _prepare_depth_input(
+        Image.new("RGB", (6400, 3600)),
+        max_dimension=MAX_AUTO_DEPTH_DIMENSION,
+    )
+
+    assert prepared.size == (2048, 1152)

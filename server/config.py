@@ -8,6 +8,8 @@ from pathlib import Path
 MEDIA_HOME_ENV = "SOUVENIR_MEDIA_HOME"
 COMMENTARY_DIR_ENV = "SOUVENIR_COMMENTARY_DIR"
 PORT_ENV = "SOUVENIR_PORT"
+UPLOAD_DIRNAME_ENV = "SOUVENIR_UPLOAD_DIRNAME"
+DEFAULT_UPLOAD_DIRNAME = "uploads"
 LIBRARY_ID_PREFIX = "root-v1"
 
 
@@ -16,6 +18,7 @@ class Settings:
     media_home: Path
     port: int = 8000
     commentary_dir: Path | None = None
+    upload_dirname: str = DEFAULT_UPLOAD_DIRNAME
 
 
 def library_id(media_home: str | Path) -> str:
@@ -39,7 +42,12 @@ def load_settings() -> Settings:
         raise RuntimeError(f"{PORT_ENV} must be an integer") from error
     if not 1 <= port <= 65535:
         raise RuntimeError(f"{PORT_ENV} must be between 1 and 65535")
-    return Settings(media_home=media_home, port=port, commentary_dir=commentary_dir())
+    return Settings(
+        media_home=media_home,
+        port=port,
+        commentary_dir=commentary_dir(),
+        upload_dirname=upload_dirname(),
+    )
 
 
 def commentary_dir() -> Path | None:
@@ -52,3 +60,19 @@ def commentary_dir() -> Path | None:
     if not root.is_dir():
         raise RuntimeError(f"{COMMENTARY_DIR_ENV} must be an existing directory: {root}")
     return root
+
+
+def upload_dirname() -> str:
+    raw = os.environ.get(UPLOAD_DIRNAME_ENV, DEFAULT_UPLOAD_DIRNAME)
+    value = raw.strip()
+    if not value:
+        raise RuntimeError(f"{UPLOAD_DIRNAME_ENV} must be a single directory name")
+    if value in {".", ".."}:
+        raise RuntimeError(f"{UPLOAD_DIRNAME_ENV} must be a single directory name")
+    if "/" in value or "\\" in value:
+        raise RuntimeError(f"{UPLOAD_DIRNAME_ENV} must be a single directory name")
+    if value.startswith("~") or value.startswith(".souvenir-"):
+        raise RuntimeError(f"{UPLOAD_DIRNAME_ENV} must not target internal Souvenir storage")
+    if os.path.isabs(value) or os.path.splitdrive(value)[0]:
+        raise RuntimeError(f"{UPLOAD_DIRNAME_ENV} must be relative")
+    return value

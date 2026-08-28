@@ -22,6 +22,25 @@ def test_configuration_uses_port_and_media_home(monkeypatch, tmp_path):
     settings = load_settings()
     assert settings.media_home == tmp_path.resolve()
     assert settings.port == 9123
+    assert settings.upload_dirname == "uploads"
+
+
+def test_configuration_accepts_custom_upload_dirname(monkeypatch, tmp_path):
+    monkeypatch.setenv("SOUVENIR_MEDIA_HOME", str(tmp_path))
+    monkeypatch.setenv("SOUVENIR_UPLOAD_DIRNAME", "incoming")
+    settings = load_settings()
+    assert settings.upload_dirname == "incoming"
+
+
+def test_configuration_rejects_invalid_upload_dirname(monkeypatch, tmp_path):
+    monkeypatch.setenv("SOUVENIR_MEDIA_HOME", str(tmp_path))
+    monkeypatch.setenv("SOUVENIR_UPLOAD_DIRNAME", "nested/uploads")
+    try:
+        load_settings()
+    except RuntimeError as error:
+        assert "SOUVENIR_UPLOAD_DIRNAME" in str(error)
+    else:
+        raise AssertionError("invalid upload dirname should be rejected")
 
 
 def test_library_id_is_stable_distinct_and_path_safe(tmp_path):

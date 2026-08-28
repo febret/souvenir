@@ -100,15 +100,28 @@ class TagStore:
             state = self._load()
             return state["commentary_volumes"].get(relative_text(relative), 1.0)
 
-    def media_adm_settings(self) -> dict[str, dict[str, bool | float]]:
+    def media_adm_settings(self) -> dict[str, dict[str, bool | float | str]]:
         with self._lock:
             state = self._load()
             return {
                 path: {
-                    "enabled": bool(setting["enabled"]),
-                    "depth_intensity": float(setting["depth_intensity"]),
+                    "enabled": bool(setting.get("enabled", False)),
+                    "depth_intensity": float(setting.get("depth_intensity", DEFAULT_ADM_DEPTH_INTENSITY)),
+                    "soft_depth_enabled": bool(setting.get("soft_depth_enabled", False)),
+                    "soft_depth_blur": float(setting.get("soft_depth_blur", 12)),
+                    "fade_depth_enabled": bool(setting.get("fade_depth_enabled", False)),
+                    "fade_depth_start": float(setting.get("fade_depth_start", 0.5)),
+                    "focus_blur_enabled": bool(setting.get("focus_blur_enabled", False)),
+                    "focus_position": str(setting.get("focus_position", "middle")),
+                    "focus_strength": str(setting.get("focus_strength", "middle")),
+                    "light_fx_enabled": bool(setting.get("light_fx_enabled", False)),
+                    "light_direction": str(setting.get("light_direction", "front")),
+                    "light_color": str(setting.get("light_color", "white")),
+                    "ambient_color": str(setting.get("ambient_color", "white")),
+                    "ambient_intensity": float(setting.get("ambient_intensity", 0.5)),
                 }
                 for path, setting in state["media_adm_settings"].items()
+                if isinstance(setting, dict)
             }
 
     def media_adm_setting(self, relative: Path) -> dict[str, bool | float | str]:
@@ -116,11 +129,32 @@ class TagStore:
         with self._lock:
             state = self._load()
             setting = state["media_adm_settings"].get(path)
+            if not isinstance(setting, dict):
+                return {
+                    "path": path,
+                    "configured": False,
+                    "enabled": False,
+                    "depth_intensity": DEFAULT_ADM_DEPTH_INTENSITY,
+                    "soft_depth_enabled": False,
+                    "soft_depth_blur": 12,
+                    "fade_depth_enabled": False,
+                    "fade_depth_start": 0.5,
+                    "focus_blur_enabled": False,
+                    "focus_position": "middle",
+                    "focus_strength": "middle",
+                }
             return {
                 "path": path,
-                "configured": isinstance(setting, dict),
-                "enabled": bool(setting["enabled"]) if isinstance(setting, dict) else False,
-                "depth_intensity": float(setting["depth_intensity"]) if isinstance(setting, dict) else DEFAULT_ADM_DEPTH_INTENSITY,
+                "configured": True,
+                "enabled": bool(setting.get("enabled", False)),
+                "depth_intensity": float(setting.get("depth_intensity", DEFAULT_ADM_DEPTH_INTENSITY)),
+                "soft_depth_enabled": bool(setting.get("soft_depth_enabled", False)),
+                "soft_depth_blur": float(setting.get("soft_depth_blur", 12)),
+                "fade_depth_enabled": bool(setting.get("fade_depth_enabled", False)),
+                "fade_depth_start": float(setting.get("fade_depth_start", 0.5)),
+                "focus_blur_enabled": bool(setting.get("focus_blur_enabled", False)),
+                "focus_position": str(setting.get("focus_position", "middle")),
+                "focus_strength": str(setting.get("focus_strength", "middle")),
             }
 
     def replace_assignment(self, relative: Path, tag_ids: object) -> dict[str, list[str] | str]:
@@ -186,25 +220,82 @@ class TagStore:
             self._save(state)
             return {"path": path, "volume": normalized}
 
-    def replace_media_adm_setting(self, relative: Path, *, enabled: object, depth_intensity: object) -> dict[str, bool | float | str]:
+    def replace_media_adm_setting(
+        self,
+        relative: Path,
+        *,
+        enabled: object,
+        depth_intensity: object,
+        soft_depth_enabled: object = False,
+        soft_depth_blur: object = 12,
+        fade_depth_enabled: object = False,
+        fade_depth_start: object = 0.5,
+        focus_blur_enabled: object = False,
+        focus_position: object = "middle",
+        focus_strength: object = "middle",
+        light_fx_enabled: object = False,
+        light_direction: object = "front",
+        light_color: object = "white",
+        ambient_color: object = "white",
+        ambient_intensity: object = 0.5,
+    ) -> dict[str, bool | float | str]:
         path = relative_text(relative)
         normalized_enabled = _adm_enabled(enabled)
         normalized_intensity = _adm_depth_intensity(depth_intensity)
+        normalized_soft_depth_enabled = _adm_enabled(soft_depth_enabled)
+        normalized_soft_depth_blur = _adm_soft_depth_blur(soft_depth_blur)
+        normalized_fade_depth_enabled = _adm_enabled(fade_depth_enabled)
+        normalized_fade_depth_start = _adm_fade_depth_start(fade_depth_start)
+        normalized_focus_blur_enabled = _adm_enabled(focus_blur_enabled)
+        normalized_focus_position = _adm_focus_position(focus_position)
+        normalized_focus_strength = _adm_focus_strength(focus_strength)
+        normalized_light_fx_enabled = _adm_enabled(light_fx_enabled)
+        normalized_light_direction = _adm_light_direction(light_direction)
+        normalized_light_color = _adm_light_color(light_color)
+        normalized_ambient_color = _adm_light_color(ambient_color)
+        normalized_ambient_intensity = _adm_ambient_intensity(ambient_intensity)
         with self._lock:
             state = self._load()
-            if normalized_enabled or normalized_intensity != DEFAULT_ADM_DEPTH_INTENSITY:
-                state["media_adm_settings"][path] = {
-                    "enabled": normalized_enabled,
-                    "depth_intensity": normalized_intensity,
-                }
+            payload = {
+                "enabled": normalized_enabled,
+                "depth_intensity": normalized_intensity,
+                "soft_depth_enabled": normalized_soft_depth_enabled,
+                "soft_depth_blur": normalized_soft_depth_blur,
+                "fade_depth_enabled": normalized_fade_depth_enabled,
+                "fade_depth_start": normalized_fade_depth_start,
+                "focus_blur_enabled": normalized_focus_blur_enabled,
+                "focus_position": normalized_focus_position,
+                "focus_strength": normalized_focus_strength,
+                "light_fx_enabled": normalized_light_fx_enabled,
+                "light_direction": normalized_light_direction,
+                "light_color": normalized_light_color,
+                "ambient_color": normalized_ambient_color,
+                "ambient_intensity": normalized_ambient_intensity,
+            }
+            if (
+                normalized_enabled
+                or normalized_intensity != DEFAULT_ADM_DEPTH_INTENSITY
+                or normalized_soft_depth_enabled
+                or normalized_soft_depth_blur != 12
+                or normalized_fade_depth_enabled
+                or normalized_fade_depth_start != 0.5
+                or normalized_focus_blur_enabled
+                or normalized_focus_position != "middle"
+                or normalized_focus_strength != "middle"
+                or normalized_light_fx_enabled
+                or normalized_light_direction != "front"
+                or normalized_light_color != "white"
+                or normalized_ambient_color != "white"
+                or normalized_ambient_intensity != 0.5
+            ):
+                state["media_adm_settings"][path] = payload
             else:
                 state["media_adm_settings"].pop(path, None)
             self._save(state)
             return {
                 "path": path,
                 "configured": True,
-                "enabled": normalized_enabled,
-                "depth_intensity": normalized_intensity,
+                **payload,
             }
 
     def _tag_ids(self, namespace: str, relative: Path) -> list[str]:
@@ -522,14 +613,126 @@ def _adm_depth_intensity(value: object) -> float:
     return round(intensity, 2)
 
 
+def _adm_soft_depth_blur(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(422, "soft_depth_blur must be a number")
+    blur = int(round(float(value)))
+    if not 2 <= blur <= 64:
+        raise HTTPException(422, "soft_depth_blur must be between 2 and 64")
+    return float(blur)
+
+
+def _adm_fade_depth_start(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(422, "fade_depth_start must be a number")
+    start = float(value)
+    if not 0 <= start <= 1:
+        raise HTTPException(422, "fade_depth_start must be between 0 and 1")
+    return round(start, 3)
+
+
+def _adm_focus_position(value: object) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(422, "focus_position must be a string")
+    normalized = value.strip().lower()
+    if normalized not in {"middle", "back", "front"}:
+        raise HTTPException(422, "focus_position must be middle, back, or front")
+    return normalized
+
+
+def _adm_focus_strength(value: object) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(422, "focus_strength must be a string")
+    normalized = value.strip().lower()
+    if normalized not in {"middle", "weak", "strong"}:
+        raise HTTPException(422, "focus_strength must be middle, weak, or strong")
+    return normalized
+
+
+_ADM_LIGHT_DIRECTIONS = {"front", "top", "top-left", "top-right", "left", "right"}
+_ADM_LIGHT_COLORS = {"white", "warm", "cool", "rose", "mint", "gold"}
+
+
+def _adm_light_direction(value: object) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(422, "light_direction must be a string")
+    normalized = value.strip().lower()
+    if normalized not in _ADM_LIGHT_DIRECTIONS:
+        raise HTTPException(422, "light_direction must be one of: front, top, top-left, top-right, left, right")
+    return normalized
+
+
+def _adm_light_color(value: object) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(422, "light_color must be a string")
+    normalized = value.strip().lower()
+    if normalized not in _ADM_LIGHT_COLORS:
+        raise HTTPException(422, "light_color must be one of: white, warm, cool, rose, mint, gold")
+    return normalized
+
+
+def _adm_ambient_intensity(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(422, "ambient_intensity must be a number")
+    intensity = float(value)
+    if not 0 <= intensity <= 1:
+        raise HTTPException(422, "ambient_intensity must be between 0 and 1")
+    return round(intensity, 2)
+
+
 def _validate_media_adm_setting(path: object, setting: object) -> None:
     _validate_assignment(path, [], [])
-    if not isinstance(setting, dict) or set(setting) != {"enabled", "depth_intensity"}:
+    if not isinstance(setting, dict):
+        raise HTTPException(500, "tag storage is malformed")
+    expected = {
+        "enabled",
+        "depth_intensity",
+        "soft_depth_enabled",
+        "soft_depth_blur",
+        "fade_depth_enabled",
+        "fade_depth_start",
+        "focus_blur_enabled",
+        "focus_position",
+        "focus_strength",
+        "light_fx_enabled",
+        "light_direction",
+        "light_color",
+        "ambient_color",
+        "ambient_intensity",
+    }
+    if not set(setting).issubset(expected):
         raise HTTPException(500, "tag storage is malformed")
     try:
         enabled = _adm_enabled(setting["enabled"])
         depth_intensity = _adm_depth_intensity(setting["depth_intensity"])
+        soft_depth_enabled = _adm_enabled(setting.get("soft_depth_enabled", False))
+        soft_depth_blur = _adm_soft_depth_blur(setting.get("soft_depth_blur", 12))
+        fade_depth_enabled = _adm_enabled(setting.get("fade_depth_enabled", False))
+        fade_depth_start = _adm_fade_depth_start(setting.get("fade_depth_start", 0.5))
+        focus_blur_enabled = _adm_enabled(setting.get("focus_blur_enabled", False))
+        focus_position = _adm_focus_position(setting.get("focus_position", "middle"))
+        focus_strength = _adm_focus_strength(setting.get("focus_strength", "middle"))
+        light_fx_enabled = _adm_enabled(setting.get("light_fx_enabled", False))
+        light_direction = _adm_light_direction(setting.get("light_direction", "front"))
+        light_color = _adm_light_color(setting.get("light_color", "white"))
+        ambient_color = _adm_light_color(setting.get("ambient_color", "white"))
+        ambient_intensity = _adm_ambient_intensity(setting.get("ambient_intensity", 0.5))
     except HTTPException as error:
         raise HTTPException(500, "tag storage is malformed") from error
-    if enabled != setting["enabled"] or depth_intensity != setting["depth_intensity"]:
+    if (
+        enabled != setting["enabled"]
+        or depth_intensity != setting["depth_intensity"]
+        or soft_depth_enabled != setting.get("soft_depth_enabled", False)
+        or soft_depth_blur != setting.get("soft_depth_blur", 12)
+        or fade_depth_enabled != setting.get("fade_depth_enabled", False)
+        or fade_depth_start != setting.get("fade_depth_start", 0.5)
+        or focus_blur_enabled != setting.get("focus_blur_enabled", False)
+        or focus_position != setting.get("focus_position", "middle")
+        or focus_strength != setting.get("focus_strength", "middle")
+        or light_fx_enabled != setting.get("light_fx_enabled", False)
+        or light_direction != setting.get("light_direction", "front")
+        or light_color != setting.get("light_color", "white")
+        or ambient_color != setting.get("ambient_color", "white")
+        or ambient_intensity != setting.get("ambient_intensity", 0.5)
+    ):
         raise HTTPException(500, "tag storage is malformed")

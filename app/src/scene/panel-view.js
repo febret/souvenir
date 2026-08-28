@@ -21,36 +21,36 @@ import {
 } from "../core/erase-mask.js";
 import { SpatialSlider } from "./spatial-slider.js";
 import { PanelOptionsView } from "./panel-options-view.js";
-import { createDisplacedPlaneGeometry } from "./depth-surface.js";
+import { createDisplacedPlaneGeometry, resolveFadeDepthRange } from "./depth-surface.js";
+import { ADM_SLIDER_ROW_STEP } from "./panel-options/constants.js";
 
 const DOUBLE_TAP_WINDOW_MS = 325;
 const DOUBLE_TAP_MAX_UV_DISTANCE = 0.15;
 
 const CONTROL_DEFINITIONS = [
-  ["🎞️", "browse"],
-  ["Lock", "toggle-lock"],
-  ["Min", "toggle-minimize"],
-  ["⚙️", "toggle-options"],
+  ["🎞️", "browse", "700 148px system-ui, sans-serif"],
+  ["◀️", "previous", "700 148px system-ui, sans-serif"],
+  ["⏯️", "toggle-slideshow", "700 126px system-ui, sans-serif"],
+  ["▶️", "next", "700 148px system-ui, sans-serif"],
+  ["🔒", "toggle-lock", "700 136px system-ui, sans-serif"],
+  ["➖", "toggle-minimize", "700 142px system-ui, sans-serif"],
+  ["⚙️", "toggle-options", "700 148px system-ui, sans-serif"],
 ];
-const PLAY_DEFINITIONS = [
-  ["◀️", "previous"],
-  ["⏯️", "toggle-slideshow"],
-  ["▶️", "next"],
-];
-const CONTROL_BUTTON_WIDTH = 0.12;
-const CONTROL_BUTTON_HEIGHT = 0.05;
-const CONTROL_BUTTON_GAP = 0.012;
+const CONTROL_BUTTON_SIZE = 0.08;
+const CONTROL_BUTTON_GAP = 0.018;
 const CONTROL_ROW_WIDTH =
-  4 * CONTROL_BUTTON_WIDTH + 3 * CONTROL_BUTTON_GAP;
+  CONTROL_DEFINITIONS.length * CONTROL_BUTTON_SIZE
+  + (CONTROL_DEFINITIONS.length - 1) * CONTROL_BUTTON_GAP;
 const PANEL_UI_FRONT_BASE_Z = 0.02;
 const PANEL_UI_DEPTH_CLEARANCE_Z = 0.012;
 const PANEL_NUMBER_BADGE_BASE_Z = 0.02;
 const PANEL_CONTROLS_BASE_Z = 0;
-const PANEL_DEPTH_SLIDER_BASE_Z = 0.02;
 const PANEL_EDITOR_CONTROLS_BASE_Z = 0.03;
 const PANEL_OPTIONS_BASE_Z = 0.03;
 const PANEL_ADM_PROMPT_BASE_Z = 0.04;
 const PANEL_BRUSH_CURSOR_BASE_Z = 0.025;
+const MAX_OPTIONS_OFFSET_X = 0.9;
+const MAX_OPTIONS_OFFSET_Y = 0.65;
 const EDITOR_ACTIONS = [
   ["Eraser", "mask-erase"],
   ["Auto Mask", "mask-auto"],
@@ -84,6 +84,203 @@ function makeBlankTexture() {
   });
 }
 
+const ADM_FOCUS_POSITIONS = Object.freeze(["middle", "back", "front"]);
+const ADM_FOCUS_STRENGTHS = Object.freeze(["middle", "weak", "strong"]);
+
+const LIGHT_DIRECTIONS_SET = new Set(["front", "top", "top-left", "top-right", "left", "right"]);
+const LIGHT_COLORS_SET = new Set(["white", "warm", "cool", "rose", "mint", "gold"]);
+
+const LIGHT_DIRECTION_VECTORS = Object.freeze({
+  front:      [0,    0,   1],
+  top:        [0,    1,   0.5],
+  "top-left": [-1,   1,   0.5],
+  "top-right":[1,    1,   0.5],
+  left:       [-1,   0,   0.5],
+  right:      [1,    0,   0.5],
+});
+
+const LIGHT_COLOR_HEX = Object.freeze({
+  white: 0xffffff,
+  warm:  0xffd6a0,
+  cool:  0xb0d4ff,
+  rose:  0xffb0c8,
+  mint:  0xa8f0d8,
+  gold:  0xffe080,
+});
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, Number(value) || 0));
+}
+
+function normalizeFocusPosition(value) {
+  return ADM_FOCUS_POSITIONS.includes(value) ? value : "middle";
+}
+
+function normalizeFocusStrength(value) {
+  return ADM_FOCUS_STRENGTHS.includes(value) ? value : "middle";
+}
+
+const PANEL_SURFACE_VERTEX_SHADER = `
+  varying vec2 vUv;
+  varying vec3 vNormalView;
+
+  void main() {
+    vUv = uv;
+    vNormalView = normalize(normalMatrix * normal);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const PANEL_SURFACE_FRAGMENT_SHADER = `
+  uniform sampler2D uMap;
+  uniform sampler2D uDepthMap;
+  uniform sampler2D uMaskMap;
+  uniform vec2 uUvRepeat;
+  uniform vec2 uUvOffset;
+  uniform vec2 uTexelSize;
+  uniform float uUseDepth;
+  uniform float uSoftEnabled;
+  uniform float uSoftBlurPx;
+  uniform float uFocusEnabled;
+  uniform float uFocalDepth;
+  uniform float uFocusBlurScale;
+  uniform float uFadeEnabled;
+  uniform float uFadeStartDepth;
+  uniform float uFadeEndDepth;
+  uniform float uMaskEnabled;
+  uniform float uAlphaTest;
+  uniform float uLightFxEnabled;
+  uniform vec3 uLightDirection;
+  uniform vec3 uLightColor;
+  uniform vec3 uAmbientColor;
+  uniform float uAmbientIntensity;
+  uniform float uBaseOpacity;
+  varying vec2 vUv;
+  varying vec3 vNormalView;
+
+  vec4 sampleColor(vec2 uv) {
+    return texture2D(uMap, uv);
+  }
+
+  void main() {
+    vec2 mappedUv = vUv * uUvRepeat + uUvOffset;
+    vec4 center = sampleColor(mappedUv);
+
+    float depthValue = 0.5;
+    if (uUseDepth > 0.5) {
+      depthValue = texture2D(uDepthMap, mappedUv).r;
+    }
+
+    float softPx = uSoftEnabled > 0.5 ? clamp(uSoftBlurPx, 0.0, 24.0) : 0.0;
+    float focusPx = 0.0;
+    if (uUseDepth > 0.5 && uFocusEnabled > 0.5) {
+      focusPx = abs(depthValue - uFocalDepth) * uFocusBlurScale * 28.0;
+    }
+    float radiusPx = clamp(softPx * 0.22 + focusPx, 0.0, 24.0);
+    vec2 radiusUv = uTexelSize * radiusPx;
+
+    vec4 blurred =
+      sampleColor(mappedUv + vec2(-1.0, 0.0) * radiusUv * 0.65) * 0.12 +
+      sampleColor(mappedUv + vec2( 1.0, 0.0) * radiusUv * 0.65) * 0.12 +
+      sampleColor(mappedUv + vec2(0.0, -1.0) * radiusUv * 0.65) * 0.12 +
+      sampleColor(mappedUv + vec2(0.0,  1.0) * radiusUv * 0.65) * 0.12 +
+      sampleColor(mappedUv + vec2(-0.707, -0.707) * radiusUv) * 0.10 +
+      sampleColor(mappedUv + vec2( 0.707, -0.707) * radiusUv) * 0.10 +
+      sampleColor(mappedUv + vec2(-0.707,  0.707) * radiusUv) * 0.10 +
+      sampleColor(mappedUv + vec2( 0.707,  0.707) * radiusUv) * 0.10 +
+      center * 0.12;
+
+    float blurMix = smoothstep(0.0, 1.0, radiusPx / 12.0);
+    vec4 color = mix(center, blurred, blurMix);
+
+    if (uFadeEnabled > 0.5 && uUseDepth > 0.5) {
+      float fadeSpan = max(0.0001, uFadeEndDepth - uFadeStartDepth);
+      float fadeProgress = clamp((depthValue - uFadeStartDepth) / fadeSpan, 0.0, 1.0);
+      float fadeAlpha = 1.0 - fadeProgress;
+      color.a *= fadeAlpha;
+    }
+
+    if (uMaskEnabled > 0.5) {
+      color.a *= texture2D(uMaskMap, mappedUv).r;
+    }
+
+    float ndl = max(0.0, dot(normalize(vNormalView), normalize(uLightDirection)));
+    vec3 lit = color.rgb;
+    if (uLightFxEnabled > 0.5) {
+      vec3 ambient = uAmbientColor * uAmbientIntensity;
+      vec3 directional = uLightColor * (0.25 + ndl * 0.75);
+      lit = color.rgb * (ambient + directional);
+    }
+
+    float alpha = color.a * uBaseOpacity;
+    if (alpha <= uAlphaTest) discard;
+    gl_FragColor = vec4(lit, alpha);
+  }
+`;
+
+function focusDepthForPosition(position) {
+  if (position === "back") return 0.78;
+  if (position === "front") return 0.22;
+  return 0.5;
+}
+
+function focusStrengthScale(strength) {
+  if (strength === "weak") return 0.7;
+  if (strength === "strong") return 1.6;
+  return 1;
+}
+
+function createDepthCanvasTexture(canvas) {
+  if (!canvas) return null;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.NoColorSpace;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function createSurfaceMaterial(texture) {
+  const fallback = texture ?? makeBlankTexture();
+  const material = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: true,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+    uniforms: {
+      uMap: { value: fallback },
+      uDepthMap: { value: fallback },
+      uMaskMap: { value: fallback },
+      uUvRepeat: { value: new THREE.Vector2(1, 1) },
+      uUvOffset: { value: new THREE.Vector2(0, 0) },
+      uTexelSize: { value: new THREE.Vector2(1 / Math.max(1, fallback.image?.width ?? 1), 1 / Math.max(1, fallback.image?.height ?? 1)) },
+      uUseDepth: { value: 0 },
+      uSoftEnabled: { value: 0 },
+      uSoftBlurPx: { value: 0 },
+      uFocusEnabled: { value: 0 },
+      uFocalDepth: { value: 0.5 },
+      uFocusBlurScale: { value: 1 },
+      uFadeEnabled: { value: 0 },
+      uFadeStartDepth: { value: 0.5 },
+      uFadeEndDepth: { value: 1 },
+      uMaskEnabled: { value: 0 },
+      uAlphaTest: { value: 0 },
+      uLightFxEnabled: { value: 0 },
+      uLightDirection: { value: new THREE.Vector3(0, 0, 1) },
+      uLightColor: { value: new THREE.Color(0xffffff) },
+      uAmbientColor: { value: new THREE.Color(0xffffff) },
+      uAmbientIntensity: { value: 0.5 },
+      uBaseOpacity: { value: 1 },
+    },
+    vertexShader: PANEL_SURFACE_VERTEX_SHADER,
+    fragmentShader: PANEL_SURFACE_FRAGMENT_SHADER,
+  });
+  material.map = fallback;
+  material.alphaMap = null;
+  material.alphaTest = 0;
+  return material;
+}
+
 /**
  * Composes one panel's media surface, interaction metadata, and feature views.
  * Expensive textures and depth geometry are updated only by their dependencies.
@@ -105,6 +302,7 @@ export class PanelView extends THREE.Group {
     this.maskTexture = null;
     this.alphaMapTexture = null;
     this.alphaMapCanvas = null;
+    this.depthMapTexture = null;
     this.editorActive = false;
     this.editorBrushSize = 0.05;
     this.maskEraseMode = true;
@@ -112,10 +310,24 @@ export class PanelView extends THREE.Group {
     this.brushCursorUv = null;
     this.contentUv = { repeat: { x: 1, y: 1 }, offset: { x: 0, y: 0 } };
     this.depthMapCanvas = null;
+    this.minimumDepthSample = 0;
+    this.maximumDepthSample = 1;
     this.maximumSurfaceDepth = 0;
     this.admEnabled = false;
     this.admBusy = false;
     this.depthIntensity = 0.35;
+    this.softDepthEnabled = false;
+    this.softDepthBlur = 12;
+    this.fadeDepthEnabled = false;
+    this.fadeDepthStart = 0.5;
+    this.focusBlurEnabled = false;
+    this.focusPosition = "middle";
+    this.focusStrength = "middle";
+    this.lightFxEnabled = false;
+    this.lightDirection = "front";
+    this.lightColor = "white";
+    this.ambientColor = "white";
+    this.ambientIntensity = 0.5;
     this.surfaceFlatGeometry = null;
     this.admPromptVisible = false;
     this.sceneTransitionActive = false;
@@ -125,10 +337,26 @@ export class PanelView extends THREE.Group {
     this.zenMode = false;
     this.mediaTagIds = [];
     this.tagDefinitions = [];
+    this.tagListExpanded = true;
     this.saveMode = "scale";
     this.numberBadgeSignature = "";
     this.contentLayoutSignature = "";
     this.depthGeometryState = null;
+    this.optionsOffset = { x: 0, y: 0 };
+    this.activeViewCamera = null;
+    this.scratchUiWorldPosition = new THREE.Vector3();
+    this.scratchUiParentQuaternion = new THREE.Quaternion();
+    this.scratchUiWorldQuaternion = new THREE.Quaternion();
+    this.scratchUiLocalQuaternion = new THREE.Quaternion();
+    this.scratchUiFacingCorrection = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0),
+      Math.PI,
+    );
+    this.scratchUiTarget = new THREE.Vector3();
+    this.scratchUiMatrix = new THREE.Matrix4();
+    this.scratchUiUp = new THREE.Vector3(0, 1, 0);
+    this.scratchUiScale = new THREE.Vector3();
+    this.uiBillboards = [];
     this.name = `panel-${panel.id}`;
     this.userData.panelId = panel.id;
     this.userData.gestureTarget = panel.id;
@@ -148,15 +376,13 @@ export class PanelView extends THREE.Group {
     );
     this.numberBadge.position.set(-0.43, 0.33, 0.02);
     this.numberBadge.userData.gestureTarget = false;
-    this.add(this.numberBadge);
+    this.uiRoot = new THREE.Group();
+    this.add(this.uiRoot);
+    this.uiRoot.add(this.numberBadge);
 
     this.surface = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
-      new THREE.MeshBasicMaterial({
-        map: makeBlankTexture(),
-        side: THREE.DoubleSide,
-        toneMapped: false,
-      }),
+      createSurfaceMaterial(makeBlankTexture()),
     );
     markInteractive(this.surface);
     this.surface.userData.kind = "panel-surface";
@@ -211,28 +437,91 @@ export class PanelView extends THREE.Group {
 
     this.controls = new THREE.Group();
     this.controls.name = "controls";
-    this.add(this.controls);
+    this.uiRoot.add(this.controls);
     this.#createControls();
-    this.optionsPanel = new PanelOptionsView(this.panel.id);
-    this.add(this.optionsPanel);
+    this.optionsPanel = new PanelOptionsView(this.panel.id, {
+      onDrag: (gesture) => this.#handleOptionsDrag(gesture),
+    });
+    this.uiRoot.add(this.optionsPanel);
     this.#createAdmControls();
     this.editorControls = new THREE.Group();
     this.editorControls.name = "mask-editor-controls";
     this.editorControls.visible = false;
-    this.add(this.editorControls);
+    this.uiRoot.add(this.editorControls);
     this.#createEditorControls();
     this.#createAdmPrompt();
+    this.uiBillboards = [
+      this.numberBadge,
+      this.controls,
+      this.optionsPanel,
+      this.editorControls,
+      this.admPrompt,
+    ];
+    this.overlayScene = null;
+    this.overlayAnchors = new Map();
+    this.overlayGroups = [this.controls, this.optionsPanel, this.editorControls, this.admPrompt];
     this.applyState(panel);
   }
 
+  /**
+   * Moves popup/control groups into the given overlay scene so they are
+   * rendered as a screen-space overlay (always in front) in Desktop Preview.
+   * Anchor Object3Ds remain in uiRoot to track each group's intended world
+   * transform; tick() copies those transforms to the overlay scene each frame.
+   */
+  setOverlayScene(scene) {
+    if (this.overlayScene === scene) return;
+    this.clearOverlayScene();
+    this.overlayScene = scene;
+    for (const group of this.overlayGroups) {
+      const anchor = new THREE.Object3D();
+      anchor.position.copy(group.position);
+      anchor.quaternion.copy(group.quaternion);
+      anchor.scale.copy(group.scale);
+      this.uiRoot.add(anchor);
+      this.overlayAnchors.set(group, anchor);
+      this.uiRoot.remove(group);
+      scene.add(group);
+    }
+    // Remove overlayed groups from billboard list; they are handled separately.
+    this.uiBillboards = this.uiBillboards.filter((b) => !this.overlayGroups.includes(b));
+  }
+
+  /** Returns overlay groups back to uiRoot and removes anchors. */
+  clearOverlayScene() {
+    if (!this.overlayScene) return;
+    for (const group of this.overlayGroups) {
+      const anchor = this.overlayAnchors.get(group);
+      if (anchor) {
+        this.uiRoot.remove(anchor);
+        this.overlayAnchors.delete(group);
+      }
+      this.overlayScene.remove(group);
+      this.uiRoot.add(group);
+    }
+    this.overlayScene = null;
+    this.uiBillboards = [
+      this.numberBadge,
+      this.controls,
+      this.optionsPanel,
+      this.editorControls,
+      this.admPrompt,
+    ];
+  }
+
   #createControls() {
-    for (const [index, [label, action]] of CONTROL_DEFINITIONS.entries()) {
+    for (const [index, [label, action, font]] of CONTROL_DEFINITIONS.entries()) {
       const button = makeButton(label, action, {
-        width: CONTROL_BUTTON_WIDTH,
-        height: CONTROL_BUTTON_HEIGHT,
+        width: CONTROL_BUTTON_SIZE,
+        height: CONTROL_BUTTON_SIZE,
+        textureWidth: 240,
+        textureHeight: 240,
+        shape: "circle",
+        font,
+        padding: 0,
       });
       button.position.set(
-        (index - 1.5) * (CONTROL_BUTTON_WIDTH + CONTROL_BUTTON_GAP),
+        (index - (CONTROL_DEFINITIONS.length - 1) / 2) * (CONTROL_BUTTON_SIZE + CONTROL_BUTTON_GAP),
         0,
         0.015,
       );
@@ -240,32 +529,28 @@ export class PanelView extends THREE.Group {
       button.userData.gestureTarget = false;
       this.controls.add(button);
     }
-    this.playControls = new THREE.Group();
-    this.playControls.position.set(0, -0.068, 0.016);
-    this.playControls.userData.gestureTarget = false;
-    this.controls.add(this.playControls);
-    for (const [index, [label, action]] of PLAY_DEFINITIONS.entries()) {
-      const button = makeButton(label, action, {
-        width: 0.102,
-        height: 0.042,
-        textureWidth: 260,
-      });
-      button.position.set((index - 1) * 0.105, 0, 0);
-      button.userData.panelId = this.panel.id;
-      button.userData.gestureTarget = false;
-      this.playControls.add(button);
-    }
   }
 
   #refreshOptionsPanel(width = this.panel?.dimensions?.width ?? 1.2, height = this.panel?.dimensions?.height ?? 0.8) {
     const rebuilt = this.optionsPanel.update({
-      width,
-      height,
       saveMode: this.saveMode,
       tagDefinitions: this.tagDefinitions,
       mediaTagIds: this.mediaTagIds,
+      tagListExpanded: this.tagListExpanded,
       depthOffset: PANEL_OPTIONS_BASE_Z + this.#uiDepthOffset(),
+      admSettings: {        softDepthEnabled: this.softDepthEnabled,
+        fadeDepthEnabled: this.fadeDepthEnabled,
+        focusBlurEnabled: this.focusBlurEnabled,
+        focusPosition: this.focusPosition,
+        focusStrength: this.focusStrength,
+        lightFxEnabled: this.lightFxEnabled,
+        lightDirection: this.lightDirection,
+        lightColor: this.lightColor,
+        ambientColor: this.ambientColor,
+        ambientIntensity: this.ambientIntensity,
+      },
     });
+    this.#layoutOptionsPanel(width, height);
     if (rebuilt) this.#updateControlStates();
   }
 
@@ -326,6 +611,7 @@ export class PanelView extends THREE.Group {
   }
 
   #createAdmControls() {
+    this.admControls = new THREE.Group();
     this.depthSlider = new SpatialSlider({
       title: "Depth",
       action: "adm-depth-slider",
@@ -333,7 +619,7 @@ export class PanelView extends THREE.Group {
       max: 3,
       step: 0.05,
       value: this.depthIntensity,
-      width: 0.36,
+      width: 0.7,
       formatValue: (value) => `${value.toFixed(2)}x`,
       onChange: (value) => this.callbacks.onAdmSetting?.(
         this.panel.id,
@@ -342,8 +628,85 @@ export class PanelView extends THREE.Group {
       ),
     });
     this.depthSlider.track.userData.panelId = this.panel.id;
-    this.depthSlider.position.set(0, -0.37, PANEL_DEPTH_SLIDER_BASE_Z);
-    this.add(this.depthSlider);
+    this.depthSlider.position.set(0, 0, 0.004);
+    this.admControls.add(this.depthSlider);
+
+    this.softDepthSlider = new SpatialSlider({
+      title: "Soft blur",
+      action: "adm-soft-depth-slider",
+      min: 2,
+      max: 64,
+      step: 2,
+      value: this.softDepthBlur,
+      width: 0.56,
+      formatValue: (value) => `${Math.round(value)}px`,
+      onChange: (value) => this.callbacks.onAdmSetting?.(
+        this.panel.id,
+        "softDepthBlur",
+        value,
+      ),
+    });
+    this.softDepthSlider.track.userData.panelId = this.panel.id;
+    this.softDepthSlider.position.set(0, -ADM_SLIDER_ROW_STEP, 0.004);
+    this.admControls.add(this.softDepthSlider);
+
+    this.fadeDepthSlider = new SpatialSlider({
+      title: "Fade start",
+      action: "adm-fade-depth-slider",
+      min: 0,
+      max: 1,
+      step: 0.05,
+      value: this.fadeDepthStart,
+      width: 0.56,
+      formatValue: (value) => value.toFixed(2),
+      onChange: (value) => this.callbacks.onAdmSetting?.(
+        this.panel.id,
+        "fadeDepthStart",
+        value,
+      ),
+    });
+    this.fadeDepthSlider.track.userData.panelId = this.panel.id;
+    this.fadeDepthSlider.position.set(0, -ADM_SLIDER_ROW_STEP * 2, 0.004);
+    this.admControls.add(this.fadeDepthSlider);
+
+    this.focusPositionSlider = new SpatialSlider({
+      title: "Focus pos",
+      action: "adm-focus-position-slider",
+      min: 0,
+      max: 2,
+      step: 1,
+      value: this.focusPosition === "back" ? 0 : this.focusPosition === "front" ? 2 : 1,
+      width: 0.56,
+      formatValue: (value) => value === 0 ? "back" : value === 2 ? "front" : "middle",
+      onChange: (value) => this.callbacks.onAdmSetting?.(
+        this.panel.id,
+        "focusPosition",
+        value === 0 ? "back" : value === 2 ? "front" : "middle",
+      ),
+    });
+    this.focusPositionSlider.track.userData.panelId = this.panel.id;
+    this.focusPositionSlider.position.set(0, -ADM_SLIDER_ROW_STEP * 3, 0.004);
+    this.admControls.add(this.focusPositionSlider);
+
+    this.focusStrengthSlider = new SpatialSlider({
+      title: "Focus strength",
+      action: "adm-focus-strength-slider",
+      min: 0,
+      max: 2,
+      step: 1,
+      value: this.focusStrength === "weak" ? 0 : this.focusStrength === "strong" ? 2 : 1,
+      width: 0.56,
+      formatValue: (value) => value === 0 ? "weak" : value === 2 ? "strong" : "middle",
+      onChange: (value) => this.callbacks.onAdmSetting?.(
+        this.panel.id,
+        "focusStrength",
+        value === 0 ? "weak" : value === 2 ? "strong" : "middle",
+      ),
+    });
+    this.focusStrengthSlider.track.userData.panelId = this.panel.id;
+    this.focusStrengthSlider.position.set(0, -ADM_SLIDER_ROW_STEP * 4, 0.004);
+    this.admControls.add(this.focusStrengthSlider);
+    this.optionsPanel.setDepthControl(this.admControls);
   }
 
   #createAdmPrompt() {
@@ -390,7 +753,7 @@ export class PanelView extends THREE.Group {
     no.userData.panelId = this.panel.id;
     no.userData.gestureTarget = false;
     this.admPrompt.add(no);
-    this.add(this.admPrompt);
+    this.uiRoot.add(this.admPrompt);
   }
 
   applyState(panel) {
@@ -421,13 +784,14 @@ export class PanelView extends THREE.Group {
       this.numberBadge.material.needsUpdate = true;
     }
     this.controls.visible = this.uiVisible && !minimized && Boolean(panel.focused ?? true);
-    const controlScale = Math.min(1, Math.max(0.3, (width - 0.025) / CONTROL_ROW_WIDTH));
+    const controlScale = Math.min(1, Math.max(0.42, (width - 0.025) / CONTROL_ROW_WIDTH));
     this.controls.scale.setScalar(controlScale);
-    this.controls.position.set(0, height / 2 + 0.07, PANEL_CONTROLS_BASE_Z);
-    this.depthSlider.position.set(0, -height / 2 - 0.08, PANEL_DEPTH_SLIDER_BASE_Z);
+    this.controls.position.set(0, height / 2 + 0.09, PANEL_CONTROLS_BASE_Z);
+    this.#syncAnchorXYScale(this.controls);
     this.depthSlider.setValue(this.depthIntensity);
     this.editorControls.scale.setScalar(Math.min(1, Math.max(0.35, (width - 0.02) / 0.78)));
-    this.editorControls.position.set(0, -height / 2 + 0.09, PANEL_EDITOR_CONTROLS_BASE_Z);
+    this.editorControls.position.set(0, -height / 2 + 0.13, PANEL_EDITOR_CONTROLS_BASE_Z);
+    this.#syncAnchorXYScale(this.editorControls);
     this.editorControls.visible = this.uiVisible && this.editorActive && !minimized;
 
     const position = panel.position ?? panel.transform?.position;
@@ -466,9 +830,11 @@ export class PanelView extends THREE.Group {
       && !minimized
       && Boolean(panel.focused ?? true)
       && !this.zenMode;
+    this.depthSlider.visible = this.optionsPanel.visible;
 
     this.#applyContentTransform(width, height);
     this.#applyUiDepthOffset();
+    this.#alignUiToCamera(this.activeViewCamera);
   }
 
   #applyContentTransform(panelWidth, panelHeight) {
@@ -500,6 +866,7 @@ export class PanelView extends THREE.Group {
       texture.offset.set(0, 0);
       this.contentUv = { repeat: { x: 1, y: 1 }, offset: { x: 0, y: 0 } };
       this.#syncMaskTransforms();
+      this.#applyDepthEffects();
       return;
     }
     const layout = mediaDisplayLayout({
@@ -526,6 +893,7 @@ export class PanelView extends THREE.Group {
       offset: { ...layout.uv.offset },
     };
     this.#syncMaskTransforms();
+    this.#applyDepthEffects();
     if (this.brushCursorUv) this.#showBrushCursor(this.brushCursorUv);
   }
 
@@ -533,7 +901,7 @@ export class PanelView extends THREE.Group {
     this.controls.visible = this.uiVisible && focused && !this.panel.minimized && !this.editorActive && !this.zenMode;
     this.editorControls.visible = this.uiVisible && focused && !this.panel.minimized && this.editorActive;
     this.depthSlider.visible = this.uiVisible && focused && !this.panel.minimized
-      && this.mediaType === "image" && this.optionsOpen && !this.zenMode;
+      && this.optionsOpen && !this.zenMode;
     this.optionsPanel.visible = this.uiVisible && focused && this.optionsOpen && !this.panel.minimized && !this.zenMode;
     const frameColor = new THREE.Color(this.panel.color ?? "#9be7b5").getHex();
     this.frame.material.color.set(frameColor);
@@ -564,7 +932,9 @@ export class PanelView extends THREE.Group {
       const result = await this.mediaTexture.load(item, url, options);
       if (!result) return null;
       this.surface.material.map = result.texture;
-      this.surface.material.color.set(0xffffff);
+      if (this.surface.material.uniforms?.uMap) {
+        this.surface.material.uniforms.uMap.value = result.texture;
+      }
       this.surface.material.needsUpdate = true;
       previousMap?.dispose();
       this.mediaType = result.type;
@@ -579,6 +949,7 @@ export class PanelView extends THREE.Group {
         ? 0.18 : this.panel.height ?? this.panel.dimensions?.height ?? this.panel.size?.height ?? 0.58;
       this.#applyContentTransform(width, height);
       this.#applyDepthGeometry();
+      this.#applyDepthEffects();
       if (result.media) {
         result.media.addEventListener("ended", () => {
           this.callbacks.onVideoEnded?.(this.panel.id);
@@ -627,6 +998,13 @@ export class PanelView extends THREE.Group {
     return this.optionsOpen;
   }
 
+  toggleTagList() {
+    this.tagListExpanded = !this.tagListExpanded;
+    this.#refreshOptionsPanel();
+    this.#updateControlStates();
+    return this.tagListExpanded;
+  }
+
   getMediaDimensions() {
     return this.mediaSize ? { ...this.mediaSize } : null;
   }
@@ -650,6 +1028,7 @@ export class PanelView extends THREE.Group {
         material.alphaTest = enabled ? 0.01 : 0;
         material.depthWrite = !enabled;
         material.needsUpdate = true;
+        this.#applyDepthEffects();
         this.#updateFrameVisibility();
         this.#updateControlStates();
   }
@@ -716,22 +1095,15 @@ export class PanelView extends THREE.Group {
 
   #updateControlStates() {
         for (const control of this.controls.children) {
-          if (control === this.playControls) continue;
           if (!control.material?.color) continue;
           const action = control.userData.action;
           const inactive = this.admPromptVisible;
           const tagInactive = false;
           const active =
             (action === "toggle-lock" && this.panel.locked) ||
-            (action === "toggle-options" && this.optionsOpen);
+            (action === "toggle-options" && this.optionsOpen) ||
+            (action === "toggle-slideshow" && this.panel.slideshow?.playing);
           control.material.color.set((inactive || tagInactive) ? 0x5f6b67 : active ? 0xaaf1c3 : 0xffffff);
-        }
-        if (this.playControls) {
-          for (const control of this.playControls.children) {
-            const action = control.userData.action;
-            const active = action === "toggle-slideshow" && this.panel.slideshow?.playing;
-            control.material.color.set(active ? 0xaaf1c3 : 0xffffff);
-          }
         }
         this.optionsPanel.updateControlStates({
           maskAvailable: this.maskAvailable,
@@ -740,24 +1112,84 @@ export class PanelView extends THREE.Group {
           maskEnabled: this.panel.maskEnabled,
           admEnabled: this.admEnabled,
           admPromptVisible: this.admPromptVisible,
+          softDepthEnabled: this.softDepthEnabled,
+          fadeDepthEnabled: this.fadeDepthEnabled,
+          focusBlurEnabled: this.focusBlurEnabled,
+          lightFxEnabled: this.lightFxEnabled,
+          lightDirection: this.lightDirection,
+          lightColor: this.lightColor,
+          ambientColor: this.ambientColor,
+          ambientIntensity: this.ambientIntensity,
+          depthAvailable: Boolean(this.depthMapCanvas),
         });
-        const sliderInteractive = this.admEnabled && this.mediaType === "image" && !this.admBusy;
-        this.depthSlider.track.userData.interactive = sliderInteractive;
-        this.depthSlider.track.material.color.set(sliderInteractive ? 0xffffff : 0x7f8b88);
+        const sliderInteractive = this.admEnabled
+          && this.mediaType === "image"
+          && this.mediaLoaded
+          && !this.admBusy
+          && !this.admPromptVisible;
+        for (const slider of [
+          this.depthSlider,
+          this.softDepthSlider,
+          this.fadeDepthSlider,
+          this.focusPositionSlider,
+          this.focusStrengthSlider,
+        ]) {
+          if (!slider?.track) continue;
+          slider.track.userData.interactive = sliderInteractive;
+          slider.track.material.color.set(sliderInteractive ? 0xffffff : 0x7f8b88);
+        }
   }
 
-  setAdmState({ enabled, intensity, busy = this.admBusy } = {}) {
+  setAdmState({
+    enabled,
+    intensity,
+    softDepthEnabled = this.softDepthEnabled,
+    softDepthBlur = this.softDepthBlur,
+    fadeDepthEnabled = this.fadeDepthEnabled,
+    fadeDepthStart = this.fadeDepthStart,
+    focusBlurEnabled = this.focusBlurEnabled,
+    focusPosition = this.focusPosition,
+    focusStrength = this.focusStrength,
+    lightFxEnabled = this.lightFxEnabled,
+    lightDirection = this.lightDirection,
+    lightColor = this.lightColor,
+    ambientColor = this.ambientColor,
+    ambientIntensity = this.ambientIntensity,
+    busy = this.admBusy,
+  } = {}) {
     this.admEnabled = Boolean(enabled);
     this.depthIntensity = Math.max(0, Math.min(3, Number(intensity) || 0.35));
+    this.softDepthEnabled = Boolean(softDepthEnabled);
+    this.softDepthBlur = clampNumber(softDepthBlur, 2, 64);
+    this.fadeDepthEnabled = Boolean(fadeDepthEnabled);
+    this.fadeDepthStart = clampNumber(fadeDepthStart, 0, 1);
+    this.focusBlurEnabled = Boolean(focusBlurEnabled);
+    this.focusPosition = normalizeFocusPosition(focusPosition);
+    this.focusStrength = normalizeFocusStrength(focusStrength);
+    this.lightFxEnabled = Boolean(lightFxEnabled);
+    this.lightDirection = LIGHT_DIRECTIONS_SET.has(lightDirection) ? lightDirection : "front";
+    this.lightColor = LIGHT_COLORS_SET.has(lightColor) ? lightColor : "white";
+    this.ambientColor = LIGHT_COLORS_SET.has(ambientColor) ? ambientColor : "white";
+    this.ambientIntensity = clampNumber(ambientIntensity, 0, 1);
     this.admBusy = Boolean(busy);
     this.depthSlider.setValue(this.depthIntensity);
+    this.softDepthSlider?.setValue(this.softDepthBlur);
+    this.fadeDepthSlider?.setValue(this.fadeDepthStart);
+    this.focusPositionSlider?.setValue(this.focusPosition === "back" ? 0 : this.focusPosition === "front" ? 2 : 1);
+    this.focusStrengthSlider?.setValue(this.focusStrength === "weak" ? 0 : this.focusStrength === "strong" ? 2 : 1);
     this.#applyDepthGeometry();
+    this.#applyDepthEffects();
+    this.#applyLighting();
+    this.#refreshOptionsPanel();
     this.#updateControlStates();
   }
 
   setDepthMap(depthCanvas) {
     this.depthMapCanvas = depthCanvas ?? null;
+    this.depthMapTexture?.dispose();
+    this.depthMapTexture = createDepthCanvasTexture(this.depthMapCanvas);
     this.#applyDepthGeometry();
+    this.#applyDepthEffects();
     this.#updateControlStates();
   }
 
@@ -792,25 +1224,75 @@ export class PanelView extends THREE.Group {
     }
     this.depthGeometryState = nextState;
     if (!shouldDisplace) {
+      this.minimumDepthSample = 0;
+      this.maximumDepthSample = 1;
       this.maximumSurfaceDepth = 0;
       if (this.surface.geometry !== this.surfaceFlatGeometry) {
         this.surface.geometry.dispose();
         this.surface.geometry = this.surfaceFlatGeometry;
       }
       this.#applyUiDepthOffset();
+      this.#applyDepthEffects();
       return;
     }
     if (this.surface.geometry !== this.surfaceFlatGeometry) {
       this.surface.geometry.dispose();
     }
-    const { geometry, maximumDepth } = createDisplacedPlaneGeometry(
+    const {
+      geometry,
+      minimumSampleDepth,
+      maximumSampleDepth,
+      maximumDepth,
+    } = createDisplacedPlaneGeometry(
       this.depthMapCanvas,
       this.depthIntensity,
       this.depthMapCanvas?.userData?.gridSegments,
     );
     this.surface.geometry = geometry;
+    this.minimumDepthSample = minimumSampleDepth;
+    this.maximumDepthSample = maximumSampleDepth;
     this.maximumSurfaceDepth = maximumDepth;
     this.#applyUiDepthOffset();
+    this.#applyDepthEffects();
+  }
+
+  #applyDepthEffects() {
+    const material = this.surface?.material;
+    if (!material?.uniforms) return;
+    const sourceTexture = material.map;
+    if (!sourceTexture) return;
+
+    const textureWidth = Math.max(1, sourceTexture.image?.videoWidth ?? sourceTexture.image?.width ?? 1);
+    const textureHeight = Math.max(1, sourceTexture.image?.videoHeight ?? sourceTexture.image?.height ?? 1);
+    material.uniforms.uMap.value = sourceTexture;
+    material.uniforms.uDepthMap.value = this.depthMapTexture ?? sourceTexture;
+    material.uniforms.uMaskMap.value = this.alphaMapTexture ?? sourceTexture;
+    material.uniforms.uUvRepeat.value.set(this.contentUv.repeat.x, this.contentUv.repeat.y);
+    material.uniforms.uUvOffset.value.set(this.contentUv.offset.x, this.contentUv.offset.y);
+    material.uniforms.uTexelSize.value.set(1 / textureWidth, 1 / textureHeight);
+    const useDepth = this.admEnabled && this.mediaType === "image" && this.depthMapTexture;
+    material.uniforms.uUseDepth.value = useDepth ? 1 : 0;
+    material.uniforms.uSoftEnabled.value = this.softDepthEnabled ? 1 : 0;
+    material.uniforms.uSoftBlurPx.value = this.softDepthBlur;
+    material.uniforms.uFocusEnabled.value = this.focusBlurEnabled ? 1 : 0;
+    material.uniforms.uFadeEnabled.value = this.fadeDepthEnabled ? 1 : 0;
+    const { startDepth, endDepth } = resolveFadeDepthRange(
+      this.fadeDepthStart,
+      useDepth ? this.minimumDepthSample : 0,
+      useDepth ? this.maximumDepthSample : 1,
+    );
+    material.uniforms.uFadeStartDepth.value = startDepth;
+    material.uniforms.uFadeEndDepth.value = endDepth;
+    material.uniforms.uMaskEnabled.value = this.alphaMapTexture ? 1 : 0;
+    material.uniforms.uAlphaTest.value = material.alphaTest ?? 0;
+    material.uniforms.uBaseOpacity.value = material.opacity ?? 1;
+
+    const baseFocalDepth = focusDepthForPosition(this.focusPosition);
+    const cameraDistance = this.activeViewCamera ? this.position.distanceTo(this.activeViewCamera.position) : 1;
+    const wobbleScale = Math.min(0.03, 0.004 + cameraDistance * 0.0035);
+    const wobble = Math.sin((performance.now() || 0) * 0.001 + this.panel.id.length * 0.31) * wobbleScale;
+    material.uniforms.uFocalDepth.value = clampNumber(baseFocalDepth + wobble, 0, 1);
+    material.uniforms.uFocusBlurScale.value = focusStrengthScale(this.focusStrength);
   }
 
   #uiDepthOffset() {
@@ -818,15 +1300,133 @@ export class PanelView extends THREE.Group {
     return Math.max(0, maximumSurfaceDepth + PANEL_UI_DEPTH_CLEARANCE_Z - PANEL_UI_FRONT_BASE_Z);
   }
 
+  #applyLighting() {
+    const material = this.surface?.material;
+    if (!material?.uniforms) return;
+    const dirVec = LIGHT_DIRECTION_VECTORS[this.lightDirection] ?? LIGHT_DIRECTION_VECTORS.front;
+    material.uniforms.uLightFxEnabled.value = this.admEnabled && this.mediaType === "image" && this.lightFxEnabled ? 1 : 0;
+    material.uniforms.uLightDirection.value.set(dirVec[0], dirVec[1], dirVec[2]).normalize();
+    material.uniforms.uLightColor.value.setHex(LIGHT_COLOR_HEX[this.lightColor] ?? 0xffffff);
+    material.uniforms.uAmbientColor.value.setHex(LIGHT_COLOR_HEX[this.ambientColor] ?? 0xffffff);
+    material.uniforms.uAmbientIntensity.value = this.ambientIntensity;
+  }
+
   #applyUiDepthOffset() {
     const offset = this.#uiDepthOffset();
     if (this.numberBadge) this.numberBadge.position.z = PANEL_NUMBER_BADGE_BASE_Z + offset;
-    if (this.controls) this.controls.position.z = PANEL_CONTROLS_BASE_Z + offset;
-    if (this.depthSlider) this.depthSlider.position.z = PANEL_DEPTH_SLIDER_BASE_Z + offset;
-    if (this.editorControls) this.editorControls.position.z = PANEL_EDITOR_CONTROLS_BASE_Z + offset;
-    if (this.optionsPanel) this.optionsPanel.position.z = PANEL_OPTIONS_BASE_Z + offset;
-    if (this.admPrompt) this.admPrompt.position.z = PANEL_ADM_PROMPT_BASE_Z + offset;
+    this.#setOverlayGroupZ(this.controls, PANEL_CONTROLS_BASE_Z + offset);
+    this.#setOverlayGroupZ(this.editorControls, PANEL_EDITOR_CONTROLS_BASE_Z + offset);
+    this.#setOverlayGroupZ(this.optionsPanel, PANEL_OPTIONS_BASE_Z + offset);
+    this.#setOverlayGroupZ(this.admPrompt, PANEL_ADM_PROMPT_BASE_Z + offset);
     if (this.brushCursor) this.brushCursor.position.z = PANEL_BRUSH_CURSOR_BASE_Z + offset;
+  }
+
+  /** Sets position.z on the group and, when in overlay mode, mirrors it to the anchor. */
+  #setOverlayGroupZ(group, z) {
+    if (!group) return;
+    group.position.z = z;
+    const anchor = this.overlayAnchors.get(group);
+    if (anchor) anchor.position.z = z;
+  }
+
+  #layoutOptionsPanel(width = this.panel?.dimensions?.width ?? 1.2, height = this.panel?.dimensions?.height ?? 0.8) {
+    const defaultX = width / 2 + this.optionsPanel.layout.width / 2 + 0.09;
+    const defaultY = height / 2 - this.optionsPanel.layout.height / 2 + 0.04;
+    const clampX = width / 2 + MAX_OPTIONS_OFFSET_X;
+    const clampY = height / 2 + MAX_OPTIONS_OFFSET_Y;
+    this.optionsOffset.x = Math.max(-clampX, Math.min(clampX, this.optionsOffset.x));
+    this.optionsOffset.y = Math.max(-clampY, Math.min(clampY, this.optionsOffset.y));
+    this.optionsPanel.position.x = defaultX + this.optionsOffset.x;
+    this.optionsPanel.position.y = defaultY + this.optionsOffset.y;
+    const optionsAnchor = this.overlayAnchors.get(this.optionsPanel);
+    if (optionsAnchor) {
+      optionsAnchor.position.copy(this.optionsPanel.position);
+    }
+  }
+
+  #handleOptionsDrag(gesture) {
+    if (gesture?.hands !== 1 || !gesture?.translation) return;
+    this.optionsOffset.x += Number(gesture.translation.x) || 0;
+    this.optionsOffset.y += Number(gesture.translation.y) || 0;
+    const width = this.panel.minimized
+      ? 0.3 : this.panel.width ?? this.panel.dimensions?.width ?? this.panel.size?.width ?? 0.95;
+    const height = this.panel.minimized
+      ? 0.18 : this.panel.height ?? this.panel.dimensions?.height ?? this.panel.size?.height ?? 0.58;
+    this.#layoutOptionsPanel(width, height);
+  }
+
+  /** Copies current group local transforms to their overlay anchors after applyState updates them. */
+  #syncAnchorsFromGroups() {
+    if (!this.overlayScene) return;
+    for (const group of this.overlayGroups) {
+      const anchor = this.overlayAnchors.get(group);
+      if (!anchor) continue;
+      anchor.position.copy(group.position);
+      anchor.scale.copy(group.scale);
+    }
+  }
+
+  /** Mirrors x/y position and scale from a group to its overlay anchor. */
+  #syncAnchorXYScale(group) {
+    if (!group) return;
+    const anchor = this.overlayAnchors.get(group);
+    if (!anchor) return;
+    anchor.position.x = group.position.x;
+    anchor.position.y = group.position.y;
+    anchor.scale.copy(group.scale);
+  }
+
+  /**
+   * Copies the world transform of each anchor (which tracks the group's
+   * intended in-scene position) to the corresponding overlay scene group,
+   * then applies camera-facing (billboard) rotation so overlay groups always
+   * face the viewer.
+   */
+  #syncOverlayGroups(camera) {
+    if (!camera) return;
+    for (const group of this.overlayGroups) {
+      const anchor = this.overlayAnchors.get(group);
+      if (!anchor) continue;
+      anchor.updateWorldMatrix(true, false);
+      anchor.getWorldPosition(this.scratchUiWorldPosition);
+      anchor.getWorldScale(this.scratchUiScale);
+      group.position.copy(this.scratchUiWorldPosition);
+      group.scale.copy(this.scratchUiScale);
+      // Billboard: face toward camera (yaw only, matching #alignUiToCamera).
+      this.scratchUiTarget.set(camera.position.x, this.scratchUiWorldPosition.y, camera.position.z);
+      if (this.scratchUiTarget.distanceToSquared(this.scratchUiWorldPosition) > 1e-9) {
+        this.scratchUiMatrix.lookAt(
+          this.scratchUiWorldPosition,
+          this.scratchUiTarget,
+          this.scratchUiUp,
+        );
+        this.scratchUiWorldQuaternion.setFromRotationMatrix(this.scratchUiMatrix);
+        group.quaternion.copy(this.scratchUiWorldQuaternion).multiply(this.scratchUiFacingCorrection);
+      }
+    }
+  }
+
+  #alignUiToCamera(camera) {
+    if (!camera) return;
+    this.activeViewCamera = camera;
+    for (const element of this.uiBillboards) {
+      if (!element?.parent) continue;
+      element.getWorldPosition(this.scratchUiWorldPosition);
+      this.scratchUiTarget.set(camera.position.x, this.scratchUiWorldPosition.y, camera.position.z);
+      if (this.scratchUiTarget.distanceToSquared(this.scratchUiWorldPosition) < 1e-9) continue;
+      this.scratchUiMatrix.lookAt(
+        this.scratchUiWorldPosition,
+        this.scratchUiTarget,
+        this.scratchUiUp,
+      );
+      this.scratchUiWorldQuaternion.setFromRotationMatrix(this.scratchUiMatrix);
+      element.parent.getWorldQuaternion(this.scratchUiParentQuaternion).invert();
+      this.scratchUiLocalQuaternion
+        .copy(this.scratchUiParentQuaternion)
+        .multiply(this.scratchUiWorldQuaternion)
+        .multiply(this.scratchUiFacingCorrection);
+      element.quaternion.copy(this.scratchUiLocalQuaternion);
+    }
   }
 
   #updateEditorControls(brushSize, blur, { erase = this.maskEraseMode, autoMaskBusy = this.autoMaskBusy } = {}) {
@@ -941,12 +1541,15 @@ export class PanelView extends THREE.Group {
         this.alphaMapTexture = null;
         this.alphaMapCanvas = null;
         this.maskOverlay.visible = false;
+        this.#applyDepthEffects();
         this.#updateFrameVisibility();
   }
 
   #updateFrameVisibility() {
-    const material = this.surface.material;
-    this.frame.visible = !(material.alphaMap && material.transparent);
+    // TODO: Consired removing the frame completely?
+    this.frame.visible = false;
+    // const material = this.surface.material;
+    // this.frame.visible = !(material.alphaMap && material.transparent);
   }
 
   /**
@@ -965,7 +1568,7 @@ export class PanelView extends THREE.Group {
     return { ...this.mediaSize };
   }
 
-  activateSurface(uv) {
+  activateSurface(uv, context = null) {
     if (this.panel.minimized) {
       this.callbacks.onAction?.(this.panel.id, "toggle-minimize");
       return;
@@ -974,6 +1577,7 @@ export class PanelView extends THREE.Group {
       this.callbacks.onAction?.(this.panel.id, "browse");
       return;
     }
+    if (context?.source === "xr-select") return;
     if (this.userData.locked) {
       this.callbacks.onAction?.(this.panel.id, "next");
       return;
@@ -1030,9 +1634,12 @@ export class PanelView extends THREE.Group {
   }
 
   dispose() {
+    this.clearOverlayScene();
     this.#clearPendingImageTap();
     if (this.editorFrame != null) cancelAnimationFrame(this.editorFrame);
     this.#clearMaskTextures();
+    this.depthMapTexture?.dispose();
+    this.depthMapTexture = null;
     if (this.surface.geometry !== this.surfaceFlatGeometry) {
       this.surface.geometry.dispose();
       this.surface.geometry = this.surfaceFlatGeometry;
@@ -1041,7 +1648,10 @@ export class PanelView extends THREE.Group {
     disposeObject(this);
   }
 
-  tick(time) {
+  tick(time, camera = this.activeViewCamera) {
+    this.#alignUiToCamera(camera);
+    if (this.overlayScene) this.#syncOverlayGroups(camera);
+    this.#applyDepthEffects();
     if (!this.editorActive || !this.autoMaskBusy) return;
     const wave = 0.5 + 0.5 * Math.sin((Number(time) || 0) * 0.008);
     this.maskRegenerationGlow.material.opacity = 0.1 + wave * 0.26;

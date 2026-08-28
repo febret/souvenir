@@ -30,6 +30,15 @@ SOUVENIR_COMMENTARY_DIR=/path/to/commentary \
 ./start.sh
 ```
 
+Optional upload directory name (under `SOUVENIR_MEDIA_HOME`, defaults to
+`uploads`):
+
+```bash
+SOUVENIR_MEDIA_HOME=/path/to/gallery \
+SOUVENIR_UPLOAD_DIRNAME=uploads \
+./start.sh
+```
+
 On first start, install the generated
 `<media home>/.souvenir-certs/ca.pem` certificate authority on the Quest. Then
 connect to `https://<server IP>:<port>` in Quest Browser.
