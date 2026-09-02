@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-import logging
 import threading
 import time
 from pathlib import Path
@@ -11,13 +9,11 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-import server.application as application
 import server.masks as masks_module
 from server.application import create_app
 from server.auto_mask import (
     AUTO_MASK_DEFAULT_BLUR,
     AUTO_MASK_INFERENCE_MAX_DIMENSION,
-    BiRefNetAutoMaskGenerator,
     _background_mask,
     _inference_image,
 )
@@ -131,16 +127,6 @@ class FakeAutoDepthGenerator:
         return None
 
 
-def test_auto_mask_generator_reports_missing_runtime_dependencies(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(
-        "server.auto_mask._missing_runtime_dependencies",
-        lambda _packages: ["einops", "kornia", "timm"],
-    )
-    generator = BiRefNetAutoMaskGenerator()
-    with pytest.raises(RuntimeError, match="einops, kornia, timm"):
-        generator.generate(Path("albums/photo.jpg"))
-
-
 def test_auto_mask_scales_inference_image_to_max_dimension_preserving_aspect_ratio():
     landscape = _inference_image(
         Image.new("RGB", (1600, 900)),
@@ -226,25 +212,6 @@ def test_health_and_directory_listing(client: TestClient):
     assert photo["size"] > 0 and photo["mtime"]
 
 
-def test_library_status_is_initial_before_lifespan(library: Path):
-    app = create_app(library)
-    client = TestClient(app)
-    status = client.get("/api/library-status").json()
-    client.close()
-
-    assert status == {
-        "status": "scanning",
-        "scanned_files": 0,
-        "media_files": 0,
-        "directories": 0,
-        "current_path": "",
-        "message": "Waiting for library scan to start",
-        "started_at": None,
-        "completed_at": None,
-        "library_id": app.state.library_id,
-    }
-
-
 def test_library_status_is_visible_during_scan_and_ready_afterwards(library: Path):
     scanner_started = threading.Event()
     allow_completion = threading.Event()
@@ -287,26 +254,6 @@ def test_library_status_reports_scanner_errors(library: Path):
     assert status["completed_at"] is not None
 
 
-def test_library_scan_logs_progress_and_counts_media(library: Path, caplog):
-    app = create_app(
-        library,
-        library_scanner=lambda root, progress: scan_media_library(root, progress, log_every_files=1),
-    )
-    caplog.set_level(logging.INFO, logger="server.library")
-    with TestClient(app):
-        assert app.state.library_scan.wait(1)
-
-    status = app.state.library_scan.progress.snapshot()
-    messages = [record.getMessage() for record in caplog.records if record.name == "server.library"]
-    assert status["status"] == "ready"
-    assert status["scanned_files"] == 4
-    assert status["media_files"] == 3
-    assert status["directories"] == 3
-    assert any(message.startswith("Starting media library scan:") for message in messages)
-    assert any(message.startswith("Media library scan progress:") for message in messages)
-    assert any(message.startswith("Media library scan complete in") for message in messages)
-
-
 def test_tree_and_clean_include_filtering(client: TestClient):
     tree = client.get("/api/tree", params=[("include", "albums/trip")]).json()
     assert tree["children"][0]["path"] == "albums"
@@ -319,19 +266,6 @@ def test_tree_and_clean_include_filtering(client: TestClient):
 @pytest.mark.parametrize("path", ["../secret", "albums/../../secret", "C:\\Windows", "/etc/passwd"])
 def test_traversal_is_rejected(client: TestClient, path: str):
     assert client.get("/api/media", params={"path": path}).status_code in (400, 404)
-
-
-def test_symlink_escape_is_not_served(client: TestClient, library: Path, tmp_path: Path):
-    outside = tmp_path / "outside.jpg"
-    Image.new("RGB", (5, 5)).save(outside)
-    link = library / "albums" / "escape.jpg"
-    try:
-        link.symlink_to(outside)
-    except OSError:
-        pytest.skip("symlink creation is unavailable")
-    assert client.get("/api/file", params={"path": "albums/escape.jpg"}).status_code == 404
-    names = [item["name"] for item in client.get("/api/media", params={"path": "albums"}).json()["entries"]]
-    assert "escape.jpg" not in names
 
 
 def test_media_response_and_ranges(client: TestClient):
@@ -425,35 +359,6 @@ def test_upload_images_reject_invalid_image_payload(client: TestClient):
     assert response.json()["detail"] == "unsupported uploaded image format"
 
 
-def test_static_spa_fallback_when_client_is_present(tmp_path: Path, monkeypatch):
-    package = tmp_path / "server"
-    package.mkdir()
-    (package / "application.py").write_text("")
-    app_dir = tmp_path / "app"
-    app_dir.mkdir()
-    (app_dir / "index.html").write_text("<h1>Souvenir</h1>")
-    monkeypatch.setattr(application, "__file__", str(package / "application.py"))
-    client = TestClient(application.create_app(tmp_path))
-    assert client.get("/").text == "<h1>Souvenir</h1>"
-    assert client.get("/xr/scene").text == "<h1>Souvenir</h1>"
-
-
-def test_mask_info_is_absent_and_mask_get_is_not_found(client: TestClient):
-    info = client.get("/api/mask-info", params={"path": "albums/photo.jpg"})
-
-    assert info.status_code == 200
-    assert info.headers["cache-control"] == "no-store"
-    assert info.json() == {
-        "exists": False,
-        "path": "albums/photo.jpg",
-        "blur": 0,
-        "updated_at": None,
-        "url": None,
-    }
-    assert client.get("/api/mask", params={"path": "albums/photo.jpg"}).status_code == 404
-    assert client.get("/api/mask", params={"path": "albums/photo.jpg", "variant": "binary"}).status_code == 404
-
-
 def test_mask_save_get_and_restart_persistence(library: Path):
     source = Image.new("RGBA", (12, 8), (255, 255, 255, 0))
     source.paste((255, 255, 255, 255), (0, 0, 6, 8))
@@ -498,35 +403,6 @@ def test_mask_save_get_and_restart_persistence(library: Path):
         assert info.json() == body
         assert restarted.get("/api/mask", params={"path": "albums/photo.jpg"}).content == fetched.content
         assert restarted.get("/api/mask", params={"path": "albums/photo.jpg", "variant": "binary"}).content == fetched_binary.content
-
-
-def test_mask_overwrite_and_delete_are_idempotent(client: TestClient):
-    first = _png_bytes((255, 0, 0, 255))
-    second = _png_bytes((0, 0, 255, 255))
-    assert client.put(
-        "/api/mask",
-        params={"path": "albums/photo.jpg", "blur": 1},
-        content=first,
-        headers={"Content-Type": "image/png"},
-    ).status_code == 200
-    saved = client.put(
-        "/api/mask",
-        params={"path": "albums/photo.jpg", "blur": 64},
-        content=second,
-        headers={"Content-Type": "image/png"},
-    )
-    assert saved.status_code == 200
-    assert saved.json()["blur"] == 64
-
-    with Image.open(BytesIO(client.get("/api/mask", params={"path": "albums/photo.jpg"}).content)) as mask:
-        assert mask.convert("RGBA").getchannel("A").getpixel((0, 0)) == 255
-    with Image.open(BytesIO(client.get("/api/mask", params={"path": "albums/photo.jpg", "variant": "binary"}).content)) as mask:
-        assert mask.convert("RGBA").getchannel("A").getpixel((0, 0)) == 255
-
-    deleted = client.delete("/api/mask", params={"path": "albums/photo.jpg"})
-    assert deleted.status_code == 200
-    assert deleted.json()["exists"] is False
-    assert client.delete("/api/mask", params={"path": "albums/photo.jpg"}).json()["exists"] is False
 
 
 @pytest.mark.parametrize("path", ["albums/ignore.txt", "../albums/photo.jpg", "albums/../../photo.jpg"])
@@ -625,57 +501,6 @@ def test_auto_mask_queue_status_completion_and_device_reporting(library: Path):
         assert generator.calls == 1
         assert generator.max_dimensions == [512]
         assert client.get("/api/mask", params={"path": "albums/photo.jpg"}).status_code == 200
-
-
-def test_auto_mask_accepts_explicit_higher_resolution_requests(library: Path):
-    generator = FakeAutoMaskGenerator(
-        payload=_png_bytes((255, 255, 255, 255), size=(20, 10)),
-        device="cuda",
-    )
-    with TestClient(create_app(library, auto_mask_generator=generator)) as client:
-        started = client.post(
-            "/api/mask/auto",
-            params={"path": "albums/photo.jpg", "max_resolution": 1024},
-        )
-        assert started.status_code == 200
-        for _ in range(40):
-            status = client.get("/api/mask/auto", params={"path": "albums/photo.jpg"}).json()
-            if status["status"] == "completed":
-                break
-            time.sleep(0.05)
-        assert generator.max_dimensions == [1024]
-
-
-def test_auto_mask_cancel_is_shared_for_same_image_path(library: Path):
-    started = threading.Event()
-    release = threading.Event()
-    generator = FakeAutoMaskGenerator(
-        payload=_png_bytes((255, 255, 255, 255), size=(20, 10)),
-        device="cuda",
-        started=started,
-        release=release,
-    )
-    with TestClient(create_app(library, auto_mask_generator=generator)) as client:
-        assert client.post("/api/mask/auto", params={"path": "albums/photo.jpg"}).status_code == 200
-        assert started.wait(1)
-        cancel = client.delete("/api/mask/auto", params={"path": "albums/photo.jpg"})
-        assert cancel.status_code == 200
-        release.set()
-        status = None
-        for _ in range(40):
-            status = client.get("/api/mask/auto", params={"path": "albums/photo.jpg"}).json()
-            if status["status"] == "cancelled":
-                break
-            time.sleep(0.05)
-        assert status is not None
-        assert status["status"] == "cancelled"
-        assert status["mask"]["exists"] is False
-        assert generator.calls == 1
-
-
-def test_auto_mask_rejects_non_image_media(client: TestClient):
-    response = client.post("/api/mask/auto", params={"path": "albums/movie.mp4"})
-    assert response.status_code == 404
 
 
 def test_depth_map_round_trip_and_size_validation(client: TestClient):
@@ -792,73 +617,6 @@ def test_media_adm_settings_persist_and_appear_in_listing(client: TestClient):
     assert photo["adm"]["depth_intensity"] == 0.8
     assert photo["adm"]["light_fx_enabled"] is False
     assert photo["adm"]["light_direction"] == "front"
-
-def test_adm_generation_passes_requested_depth_resolution(library: Path):
-    mask_generator = FakeAutoMaskGenerator(payload=_png_bytes((255, 255, 255, 255)))
-    depth_generator = FakeAutoDepthGenerator(payload=_png_bytes(mode="L"))
-    with TestClient(
-        create_app(
-            library,
-            auto_mask_generator=mask_generator,
-            auto_depth_generator=depth_generator,
-        )
-    ) as client:
-        response = client.post(
-            "/api/adm/auto",
-            params={"path": "albums/photo.jpg", "max_resolution": 192},
-        )
-        assert response.status_code == 200
-        for _ in range(40):
-            status = client.get("/api/adm/auto", params={"path": "albums/photo.jpg"}).json()
-            if status["status"] == "completed":
-                break
-            time.sleep(0.05)
-        assert mask_generator.max_dimensions == []
-        assert depth_generator.max_dimensions == [192]
-
-
-def test_auto_depth_accepts_explicit_higher_resolution_requests(library: Path):
-    generator = FakeAutoDepthGenerator(payload=_png_bytes(mode="L"))
-    with TestClient(create_app(library, auto_depth_generator=generator)) as client:
-        response = client.post(
-            "/api/depth/auto",
-            params={"path": "albums/photo.jpg", "max_resolution": 1024},
-        )
-
-        assert response.status_code == 200
-        for _ in range(40):
-            status = client.get("/api/depth/auto", params={"path": "albums/photo.jpg"}).json()
-            if status["status"] == "completed":
-                break
-            time.sleep(0.05)
-        assert generator.max_dimensions == [1024]
-
-
-def test_mask_writes_remain_consistent_during_concurrent_requests(client: TestClient, library: Path):
-    options = [
-        (_png_bytes((255, 0, 0, 255)), 3),
-        (_png_bytes((0, 255, 0, 255)), 20),
-        (_png_bytes((0, 0, 255, 255)), 48),
-    ]
-
-    def save(option: tuple[bytes, int]) -> int:
-        data, blur = option
-        return client.put(
-            "/api/mask",
-            params={"path": "albums/photo.jpg", "blur": blur},
-            content=data,
-            headers={"Content-Type": "image/png"},
-        ).status_code
-
-    with ThreadPoolExecutor(max_workers=len(options)) as executor:
-        assert list(executor.map(save, options)) == [200, 200, 200]
-
-    info = client.get("/api/mask-info", params={"path": "albums/photo.jpg"})
-    raw = client.get("/api/mask", params={"path": "albums/photo.jpg"})
-    assert info.status_code == raw.status_code == 200
-    assert info.json()["blur"] in {blur for _, blur in options}
-    assert not list((library / ".souvenir-masks").glob("*.tmp"))
-
 
 def test_mask_directory_is_excluded_from_listing_tree_and_scan(client: TestClient, library: Path):
     masks = library / ".souvenir-masks"

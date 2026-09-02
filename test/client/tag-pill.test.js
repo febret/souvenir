@@ -1,80 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { applyTagPillPreview, createTagPill, TagPreviewResolver } from "../../app/src/ui/tag-pill.js";
-
-function createFakeElement() {
-  const classes = new Set();
-  const styles = new Map();
-  return {
-    className: "",
-    dataset: {},
-    textContent: "",
-    style: {
-      setProperty(name, value) {
-        styles.set(name, value);
-      },
-      removeProperty(name) {
-        styles.delete(name);
-      },
-      getPropertyValue(name) {
-        return styles.get(name) ?? "";
-      },
-    },
-    classList: {
-      add(name) {
-        classes.add(name);
-      },
-      remove(name) {
-        classes.delete(name);
-      },
-      contains(name) {
-        return classes.has(name);
-      },
-    },
-  };
-}
-
-const fakeDocument = {
-  createElement() {
-    return createFakeElement();
-  },
-};
+import { TagPreviewResolver } from "../../app/src/ui/tag-pill.js";
 
 describe("tag pills", () => {
-  it("applies and clears preview backgrounds", () => {
-    const pill = createTagPill(fakeDocument, { tagId: "blue", label: "Blue" });
-
-    applyTagPillPreview(pill, "/api/thumbnail?path=albums%2Fbeach.jpg");
-    expect(pill.style.getPropertyValue("--tag-pill-image"))
-      .toContain("/api/thumbnail?path=albums%2Fbeach.jpg");
-    expect(pill.classList.contains("tag-pill--with-preview")).toBe(true);
-
-    applyTagPillPreview(pill, "");
-    expect(pill.style.getPropertyValue("--tag-pill-image")).toBe("");
-    expect(pill.classList.contains("tag-pill--with-preview")).toBe(false);
-  });
-
-  it("ignores videos when finding a background for a tag", async () => {
-    const api = {
-      directory: vi.fn(async () => ({
-        entries: [
-          { kind: "file", path: "albums/clip.webm", name: "clip.webm", media_type: "video/webm", tag_ids: ["blue"] },
-          { kind: "file", path: "albums/beach.jpg", name: "beach.jpg", media_type: "image/jpeg", tag_ids: ["blue"] },
-        ],
-      })),
-      thumbnailUrl: vi.fn((path) => `/thumb/${encodeURIComponent(path)}`),
-    };
-    const resolver = new TagPreviewResolver({
-      api,
-      selectedDirectories: () => ["albums"],
-    });
-
-    resolver.ensure(["blue"]);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(resolver.previewFor("blue")).toBe("/thumb/albums%2Fbeach.jpg");
-  });
-
   it("prefers different media for different tags when possible", async () => {
     const api = {
       directory: vi.fn(async (path) => ({

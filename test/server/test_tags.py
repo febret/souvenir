@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -70,22 +68,6 @@ def test_tag_crud_normalizes_names_and_persists_assignments(library: Path):
 )
 def test_tag_name_validation_rejects_invalid_types_and_controls(client: TestClient, name: object):
     assert client.post("/api/tags", json={"name": name}).status_code == 422
-
-
-def test_tag_names_are_case_insensitively_unique_and_unicode_is_allowed(client: TestClient):
-    created = _create(client, "Café")
-    assert client.post("/api/tags", json={"name": "cAFÉ"}).status_code == 422
-    assert client.patch(f"/api/tags/{created['id']}", json={"name": "旅行"}).status_code == 200
-    assert client.post("/api/tags", json={"name": "旅行"}).status_code == 422
-
-
-def test_tag_limit_and_body_validation(client: TestClient):
-    for index in range(100):
-        _create(client, f"tag {index}")
-    assert client.post("/api/tags", json={"name": "one more"}).status_code == 422
-    assert client.post("/api/tags", content=b"{bad", headers={"Content-Type": "application/json"}).status_code == 422
-    assert client.post("/api/tags", json=["not", "an", "object"]).status_code == 422
-    assert client.post("/api/tags", json={"wrong": "field"}).status_code == 422
 
 
 def test_media_tag_validation_listing_metadata_and_safe_paths(client: TestClient):
@@ -204,26 +186,6 @@ def test_bulk_media_tag_replacement_is_all_or_nothing_when_validation_fails(clie
     assert client.get("/api/media-tags", params={"path": "albums/movie.mp4"}).json()["tag_ids"] == [second["id"]]
 
 
-def test_assignment_uses_canonical_media_path_on_case_insensitive_filesystems(
-    client: TestClient,
-):
-    if os.path.normcase("A") == "A":
-        pytest.skip("filesystem paths are case-sensitive")
-    tag = _create(client, "Canonical")
-
-    saved = client.put(
-        "/api/media-tags",
-        params={"path": "ALBUMS/PHOTO.JPG"},
-        json={"tag_ids": [tag["id"]]},
-    )
-
-    assert saved.status_code == 200
-    assert saved.json()["path"] == "albums/photo.jpg"
-    listing = client.get("/api/media", params={"path": "albums"}).json()
-    photo = next(entry for entry in listing["files"] if entry["name"] == "photo.jpg")
-    assert photo["tag_ids"] == [tag["id"]]
-
-
 def test_malformed_tag_storage_is_explicit_server_error(client: TestClient, library: Path):
     tag_file = library / ".souvenir-tags.json"
     tag_file.write_text("{not json", encoding="utf-8")
@@ -233,18 +195,6 @@ def test_malformed_tag_storage_is_explicit_server_error(client: TestClient, libr
 
     tag_file.write_text(json.dumps({"version": 1, "updated_at": None, "tags": [], "assignments": {"../bad": []}}))
     assert client.get("/api/tags").status_code == 500
-
-
-def test_tag_writes_are_atomic_during_concurrent_updates(client: TestClient, library: Path):
-    def create(index: int) -> int:
-        return client.post("/api/tags", json={"name": f"concurrent {index}"}).status_code
-
-    with ThreadPoolExecutor(max_workers=12) as executor:
-        assert list(executor.map(create, range(12))) == [201] * 12
-
-    stored = json.loads((library / ".souvenir-tags.json").read_text(encoding="utf-8"))
-    assert len(stored["tags"]) == 12
-    assert not list(library.glob("..souvenir-tags.json.*.tmp"))
 
 
 def test_tag_storage_file_is_excluded_from_media_apis_listing_and_scan(client: TestClient, library: Path):

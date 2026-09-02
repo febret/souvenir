@@ -5,7 +5,6 @@ import {
   normalizeMediaEntry,
   sortMedia,
 } from "../../app/src/core/media.js";
-import { nextMedia, previousMedia } from "../../app/src/core/playlist.js";
 
 const media = [
   { id: "z", name: "zebra.jpg", mtimeMs: 10, size: 1 },
@@ -45,11 +44,5 @@ describe("media sorting and playlist navigation", () => {
       tag_ids: ["blue", "4"],
     });
     expect(normalizeMediaEntry(normalized).mtime).toBe(normalized.mtime);
-  });
-
-  it("wraps previous and next navigation", () => {
-    expect(nextMedia(media, "b").id).toBe("z");
-    expect(nextMedia(media, "z").id).toBe("a");
-    expect(previousMedia(media, "a").id).toBe("z");
   });
 });

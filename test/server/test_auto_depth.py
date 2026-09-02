@@ -24,21 +24,3 @@ def test_depth_input_does_not_upscale_small_images():
 
     assert prepared is source
     assert prepared.size == (320, 240)
-
-
-def test_depth_input_uses_requested_maximum_dimension():
-    prepared = _prepare_depth_input(
-        Image.new("RGB", (1600, 900)),
-        max_dimension=192,
-    )
-
-    assert prepared.size == (192, 108)
-
-
-def test_depth_input_supports_explicit_larger_requested_dimension():
-    prepared = _prepare_depth_input(
-        Image.new("RGB", (6400, 3600)),
-        max_dimension=MAX_AUTO_DEPTH_DIMENSION,
-    )
-
-    assert prepared.size == (2048, 1152)

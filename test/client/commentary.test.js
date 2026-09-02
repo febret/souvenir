@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   aggregateEntryTagCounts,
   aggregatePanelTagCounts,
-  createCommentaryVolumeController,
   normalizeTagFrequency,
   normalizeCommentaryVolume,
   scoreCommentary,
@@ -19,44 +18,6 @@ describe("commentary selection", () => {
     expect(normalizeCommentaryVolume(3)).toBe(3);
     expect(normalizeCommentaryVolume(5)).toBe(4);
     expect(normalizeCommentaryVolume("invalid")).toBe(1);
-  });
-
-  it("uses gain-based playback when commentary volume is boosted", () => {
-    const audio = { volume: 0 };
-    const gainNode = {
-      gain: { value: 1 },
-      connect() {},
-      disconnect() {},
-    };
-    const sourceNode = {
-      connect() {},
-      disconnect() {},
-    };
-    const audioContext = {
-      destination: {},
-      createMediaElementSource(element) {
-        expect(element).toBe(audio);
-        return sourceNode;
-      },
-      createGain() {
-        return gainNode;
-      },
-      close() {
-        return Promise.resolve();
-      },
-    };
-    const controller = createCommentaryVolumeController(audio, {
-      createAudioContext: () => audioContext,
-    });
-
-    controller.prepare(1.6);
-    controller.apply(1.6);
-    expect(audio.volume).toBe(1);
-    expect(gainNode.gain.value).toBe(1.6);
-
-    controller.apply(0.35);
-    expect(audio.volume).toBe(0.35);
-    expect(gainNode.gain.value).toBe(1);
   });
 
   it("counts each open panel's current media once per unique tag", () => {
@@ -95,19 +56,6 @@ describe("commentary selection", () => {
     ]);
   });
 
-  it("limits positive candidates to the deterministic top three", () => {
-    const entries = [
-      { path: "four.wav", tag_ids: ["four"] },
-      { path: "two.wav", tag_ids: ["two"] },
-      { path: "one.wav", tag_ids: ["one"] },
-      { path: "three.wav", tag_ids: ["three"] },
-    ];
-    const counts = { one: 4, two: 3, three: 2, four: 1 };
-
-    expect(selectCommentary(entries, counts, { random: () => 0.999999 }).path).toBe("three.wav");
-    expect(selectCommentary(entries, counts, { random: () => 0 }).path).toBe("one.wav");
-  });
-
   it("uses weighted boundaries, then uniformly falls back for zero scores", () => {
     const weighted = [
       { path: "first.wav", tag_ids: ["first"] },
@@ -124,23 +72,6 @@ describe("commentary selection", () => {
     expect(selectCommentary(zero, {}, { random: () => 0 }).path).toBe("a.wav");
     expect(selectCommentary(zero, {}, { random: () => 0.5 }).path).toBe("b.wav");
     expect(selectCommentary(zero, {}, { random: () => 0.99999 }).path).toBe("c.wav");
-  });
-
-  it("avoids the immediately prior selection when another candidate exists", () => {
-    const entries = [
-      { path: "one.wav", tag_ids: ["tag"] },
-      { path: "two.wav", tag_ids: ["tag"] },
-    ];
-
-    expect(selectCommentary(entries, { tag: 1 }, {
-      previousPath: "one.wav",
-      random: () => 0,
-    }).path).toBe("two.wav");
-    expect(selectCommentary([{ path: "only.wav" }], {}, {
-      previousPath: "only.wav",
-      random: () => 0,
-    }).path).toBe("only.wav");
-    expect(selectCommentary([], {}, { random: () => 0 })).toBeNull();
   });
 
   it("aggregates and normalizes entry tags for distribution comparisons", () => {

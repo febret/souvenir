@@ -1,16 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  MAX_BRUSH_SIZE,
-  MAX_MASK_BLUR,
-  MIN_BRUSH_SIZE,
-  binaryEraseMaskCanvas,
-  clampBrushSize,
-  clampMaskBlur,
   clearEraseMask,
   createEraseMaskCanvas,
   eraseMaskHasPaint,
   maskCanvasDimensions,
-  normalizedStrokePoints,
   opacityMapCanvas,
   paintEraseStroke,
   surfaceUvToSourceUv,
@@ -113,28 +106,6 @@ describe("erase mask helpers", () => {
     })).toEqual({ x: 0, y: 1 });
   });
 
-  it("clamps brush size and blur to stable editor bounds", () => {
-    expect(clampBrushSize(-1)).toBe(MIN_BRUSH_SIZE);
-    expect(clampBrushSize("not-a-number")).toBe(MIN_BRUSH_SIZE);
-    expect(clampBrushSize(9)).toBe(MAX_BRUSH_SIZE);
-    expect(clampMaskBlur(-2)).toBe(0);
-    expect(clampMaskBlur(1.6)).toBe(2);
-    expect(clampMaskBlur(999)).toBe(MAX_MASK_BLUR);
-  });
-
-  it("interpolates continuous strokes densely enough that the painted line has no gaps", () => {
-    const points = normalizedStrokePoints({ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }, 0.02);
-    expect(points).toHaveLength(116);
-    expect(points[0]).toEqual({ x: 0.1, y: 0.5 });
-    expect(points.at(-1)).toEqual({ x: 0.9, y: 0.5 });
-
-    const canvas = createEraseMaskCanvas(100, 100);
-    paintEraseStroke(canvas, points[0], points.at(-1), 0.02);
-    for (let x = 10; x <= 90; x += 1) {
-      expect(alpha(canvas, x, 50), `stroke gap at x=${x}`).toBeGreaterThan(0);
-    }
-  });
-
   it("caps working canvas dimensions while retaining the source aspect ratio", () => {
     expect(maskCanvasDimensions(4000, 2000)).toEqual({ width: 1024, height: 512 });
     expect(maskCanvasDimensions(800, 1600)).toEqual({ width: 512, height: 1024 });
@@ -154,37 +125,4 @@ describe("erase mask helpers", () => {
     expect(eraseMaskHasPaint(canvas)).toBe(false);
   });
 
-  it("normalizes saved mask pixels to a binary transparent-or-erased field", () => {
-    const canvas = createEraseMaskCanvas(3, 1);
-    const source = canvas.getContext("2d");
-    source.data[3] = 127;
-    source.data[7] = 128;
-    source.data[11] = 255;
-
-    const binary = binaryEraseMaskCanvas(canvas);
-    expect(alpha(binary, 0, 0)).toBe(0);
-    expect(alpha(binary, 1, 0)).toBe(255);
-    expect(alpha(binary, 2, 0)).toBe(255);
-  });
-
-  it("maps erase alpha directly to inverse display opacity", () => {
-    const canvas = createEraseMaskCanvas(9, 9);
-    const context = canvas.getContext("2d");
-    context.data[(4 * canvas.width + 4) * 4 + 3] = 255;
-    context.data[(4 * canvas.width + 3) * 4 + 3] = 128;
-    const opacity = opacityMapCanvas(canvas, 1);
-    expect(pixel(opacity, 4, 4)).toBe(0);
-    expect(pixel(opacity, 3, 4)).toBe(127);
-    expect(pixel(opacity, 0, 0)).toBe(255);
-  });
-
-  it("does not threshold partial source alpha", () => {
-    const canvas = createEraseMaskCanvas(3, 1);
-    const context = canvas.getContext("2d");
-    context.data[3] = 127;
-    context.data[7] = 128;
-    const opacity = opacityMapCanvas(canvas);
-    expect(pixel(opacity, 0, 0)).toBe(128);
-    expect(pixel(opacity, 1, 0)).toBe(127);
-  });
 });

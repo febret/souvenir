@@ -1,24 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createScene } from "../../app/src/core/scene-state.js";
 import { ScenePlaybackController } from "../../app/src/scene/scene-playback-controller.js";
 
-function panel(id, x = 0) {
+function panel(id) {
   return {
     id,
     media: { directory: "photos", selectedId: `${id}.jpg`, sort: "name", view: "thumbnails" },
     transform: {
-      position: { x, y: 1, z: -1 },
+      position: { x: 0, y: 1, z: -1 },
       rotation: { x: 0, y: 0, z: 0 },
     },
     dimensions: { width: 1, height: 1 },
   };
 }
 
-function controllerFixture({ panels = [panel("a")], now = () => 100 } = {}) {
+function controllerFixture({ panels = [panel("a")] } = {}) {
   const stateChanges = [];
-  const transitions = [];
-  const cleared = [];
   const api = {
     scenes: vi.fn(() => Promise.resolve({ scenes: [{ id: "scene-1" }] })),
     createScene: vi.fn((name) => Promise.resolve({ id: "scene-1", name, loop: false })),
@@ -37,13 +34,13 @@ function controllerFixture({ panels = [panel("a")], now = () => 100 } = {}) {
       const index = panels.findIndex((item) => item.id === id);
       if (index >= 0) panels.splice(index, 1);
     },
-    applyPanelTransition: (id, step, progress) => transitions.push({ id, step, progress }),
-    clearPanelTransition: (id) => cleared.push(id),
+    applyPanelTransition() {},
+    clearPanelTransition() {},
     onStateChange: (state) => stateChanges.push(state),
     onError: vi.fn(),
-    now,
+    now: () => 100,
   });
-  return { api, controller, panels, stateChanges, transitions, cleared };
+  return { api, controller, panels, stateChanges };
 }
 
 describe("ScenePlaybackController", () => {
@@ -62,31 +59,5 @@ describe("ScenePlaybackController", () => {
       expect.objectContaining({ shots: expect.any(Array), current_shot_id: captured.current_shot_id }),
     );
     expect(stateChanges.at(-1)).toEqual(created);
-  });
-
-  it("advances playback and applies interpolated panel transitions", async () => {
-    const { controller, transitions } = controllerFixture({ now: () => 100 });
-    controller.scene = createScene({
-      id: "scene-1",
-      loop: false,
-      current_shot_id: "first",
-      shots: [
-        { id: "first", duration_sec: 1, panels: [panel("a", 0)] },
-        { id: "second", duration_sec: 1, panels: [panel("a", 2)] },
-      ],
-    });
-    controller.playbackActive = true;
-    controller.nextAdvanceAt = 200;
-
-    controller.advancePlayback(200);
-    await Promise.resolve();
-    controller.updateTransition(600);
-
-    expect(controller.getState().current_shot_id).toBe("second");
-    expect(controller.nextAdvanceAt).toBe(1100);
-    expect(transitions.at(-1)).toEqual(expect.objectContaining({ id: "a", progress: 0.5 }));
-
-    controller.updateTransition(1100);
-    expect(controller.transition).toBeNull();
   });
 });

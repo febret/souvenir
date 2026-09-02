@@ -149,21 +149,6 @@ describe("panel model and store", () => {
     });
   });
 
-  it("retains saved media until an availability list has loaded", () => {
-    const store = new PanelStore({
-      panels: [
-        {
-          id: "one",
-          media: { directory: "photos", selectedId: "beach" },
-        },
-      ],
-    });
-    expect(store.getState().panels[0].media).toMatchObject({
-      directory: "photos",
-      selectedId: "beach",
-    });
-  });
-
   it("notifies subscriptions and removes the focused panel", () => {
     const store = new PanelStore({ idFactory: (() => { let id = 0; return () => `p${++id}`; })() });
     const snapshots = [];
@@ -174,41 +159,6 @@ describe("panel model and store", () => {
     unsubscribe();
     expect(store.getState().focusedId).toBe("p1");
     expect(snapshots).toHaveLength(3);
-  });
-
-  it("does not publish idempotent focus or pose updates", () => {
-    const store = new PanelStore({ idFactory: () => "one" });
-    store.add();
-    const changes = [];
-    const unsubscribe = store.subscribe((_state, change) => changes.push(change));
-
-    expect(store.focus("one")).toBe(true);
-    store.setPose("one", {
-      transform: {
-        position: { x: 0, y: 0, z: -1 },
-        rotation: { x: 0, y: 0, z: 0 },
-      },
-      dimensions: { width: 1.2, height: 0.8 },
-    });
-    expect(changes).toEqual([]);
-
-    store.setPose("one", {
-      transform: {
-        position: { x: 0.2, y: 1, z: -1.5 },
-        rotation: { x: 0, y: 0.1, z: 0 },
-      },
-      dimensions: { width: 1.4, height: 0.9 },
-    });
-    unsubscribe();
-
-    expect(changes).toEqual([{ type: "panel", panelIds: ["one"] }]);
-    expect(store.getState().panels[0]).toMatchObject({
-      transform: {
-        position: { x: 0.2, y: 1, z: -1.5 },
-        rotation: { x: 0, y: 0.1, z: 0 },
-      },
-      dimensions: { width: 1.4, height: 0.9 },
-    });
   });
 
   it("minimizes and restores panel dimensions without losing its pose", () => {

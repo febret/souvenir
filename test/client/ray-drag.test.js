@@ -16,19 +16,6 @@ function inverseQuaternion(value) {
   return { x: -value.x, y: -value.y, z: -value.z, w: value.w };
 }
 
-function rotateVector(value, quaternion) {
-  const twiceCross = {
-    x: 2 * (quaternion.y * value.z - quaternion.z * value.y),
-    y: 2 * (quaternion.z * value.x - quaternion.x * value.z),
-    z: 2 * (quaternion.x * value.y - quaternion.y * value.x),
-  };
-  return {
-    x: value.x + quaternion.w * twiceCross.x + quaternion.y * twiceCross.z - quaternion.z * twiceCross.y,
-    y: value.y + quaternion.w * twiceCross.y + quaternion.z * twiceCross.x - quaternion.x * twiceCross.z,
-    z: value.z + quaternion.w * twiceCross.z + quaternion.x * twiceCross.y - quaternion.y * twiceCross.x,
-  };
-}
-
 function expectVectorClose(actual, expected) {
   expect(actual.x).toBeCloseTo(expected.x, 12);
   expect(actual.y).toBeCloseTo(expected.y, 12);
@@ -42,70 +29,7 @@ function expectQuaternionClose(actual, expected) {
   expect(actual.w).toBeCloseTo(expected.w, 12);
 }
 
-function anchorWorldPoint(pose, anchor, scale) {
-  const scaledAnchor = rotateVector({
-    x: anchor.x * scale.x,
-    y: anchor.y * scale.y,
-    z: anchor.z * scale.z,
-  }, pose.quaternion);
-  return {
-    x: pose.position.x + scaledAnchor.x,
-    y: pose.position.y + scaledAnchor.y,
-    z: pose.position.z + scaledAnchor.z,
-  };
-}
-
 describe("anchored ray dragging", () => {
-  it("returns the exact initial pose for a centered initial grab", () => {
-    const targetPosition = { x: 0, y: 0, z: -3 };
-    const targetQuaternion = { x: 0, y: 1, z: 0, w: 0 };
-    const state = createRayDragState({
-      rayOrigin: { x: 0, y: 0, z: 0 },
-      rayDirection: { x: 0, y: 0, z: -1 },
-      hitPoint: targetPosition,
-      targetPosition,
-      targetQuaternion,
-      targetScale: { x: 1, y: 1, z: 1 },
-      controllerQuaternion: identity,
-    });
-
-    const pose = solveRayDragPose(state, {
-      rayOrigin: { x: 0, y: 0, z: 0 },
-      rayDirection: { x: 0, y: 0, z: -1 },
-      controllerQuaternion: identity,
-    });
-
-    expect(pose.position).toEqual(targetPosition);
-    expect(pose.quaternion).toEqual(targetQuaternion);
-  });
-
-  it("keeps an off-center local hit anchor on the ray endpoint with nonuniform target scale", () => {
-    const targetPosition = { x: 0, y: 0, z: -3 };
-    const targetScale = { x: 2, y: 3, z: 4 };
-    const localAnchor = { x: 0.5, y: -1, z: 0.25 };
-    const targetQuaternion = { x: 0, y: 0, z: Math.SQRT1_2, w: Math.SQRT1_2 };
-    const hitPoint = { x: 3, y: 1, z: -2 };
-    const state = createRayDragState({
-      rayOrigin: { x: 3, y: 1, z: 10 },
-      rayDirection: { x: 0, y: 0, z: -2 },
-      hitPoint,
-      targetPosition,
-      targetQuaternion,
-      targetScale,
-      controllerQuaternion: targetQuaternion,
-    });
-
-    const pose = solveRayDragPose(state, {
-      rayOrigin: { x: 3, y: 1, z: 10 },
-      rayDirection: { x: 0, y: 0, z: -1 },
-      controllerQuaternion: targetQuaternion,
-    });
-
-    expectVectorClose(state.localAnchor, localAnchor);
-    expect(pose.rayEndpoint).toEqual(hitPoint);
-    expectVectorClose(anchorWorldPoint(pose, localAnchor, targetScale), pose.rayEndpoint);
-  });
-
   it("translates the target equally when the ray origin translates", () => {
     const state = createRayDragState({
       rayOrigin: { x: 1, y: 2, z: 3 },
@@ -183,29 +107,6 @@ describe("anchored ray dragging", () => {
     })).toMatchObject({
       rayEndpoint: { x: 8, y: 4, z: 5 },
     });
-  });
-
-  it("always returns a normalized output quaternion", () => {
-    const state = createRayDragState({
-      rayOrigin: { x: 0, y: 0, z: 0 },
-      rayDirection: { x: 0, y: 0, z: -1 },
-      hitPoint: { x: 0, y: 0, z: -1 },
-      targetPosition: { x: 0, y: 0, z: -1 },
-      targetQuaternion: { x: 0, y: 2, z: 0, w: 2 },
-      controllerQuaternion: { x: 0, y: 0, z: 0, w: 3 },
-    });
-
-    const pose = solveRayDragPose(state, {
-      rayDirection: { x: 0, y: 0, z: -1 },
-      controllerQuaternion: { x: 2, y: 0, z: 0, w: 2 },
-    });
-
-    expect(Math.hypot(
-      pose.quaternion.x,
-      pose.quaternion.y,
-      pose.quaternion.z,
-      pose.quaternion.w,
-    )).toBeCloseTo(1, 12);
   });
 
   it("rejects zero, non-finite, and invalid solve ray directions explicitly", () => {

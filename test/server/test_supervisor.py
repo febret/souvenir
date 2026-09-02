@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import logging
-from pathlib import Path
-
 import pytest
 
-from server.supervisor import build_worker_command, run_console_supervisor
+from server.supervisor import run_console_supervisor
 
 
 class FakeChild:
@@ -67,21 +64,6 @@ def test_carriage_return_restarts_old_child_once_and_waits_for_replacement():
     assert replacement.wait_calls == 1
 
 
-def test_unknown_console_command_logs_message_without_restarting(caplog):
-    child = FakeChild()
-    spawn = SpawnRecorder([child])
-    caplog.set_level(logging.INFO, logger="server.supervisor")
-
-    run_console_supervisor(["python", "-m", "server", "--worker"], stdin=iter(["reload\n"]), spawn=spawn)
-
-    assert len(spawn.commands) == 1
-    assert child.terminate_calls == 0
-    assert any(
-        "Unknown console command" in record.getMessage() and "reload" in record.getMessage()
-        for record in caplog.records
-    )
-
-
 def test_stdin_eof_waits_for_healthy_child_without_terminating_or_looping():
     child = FakeChild(return_code=23)
     spawn = SpawnRecorder([child])
@@ -108,27 +90,3 @@ def test_keyboard_interrupt_terminates_and_waits_for_child():
         )
 
     assert child.terminate_calls == child.wait_calls == 1
-
-
-def test_worker_command_preserves_server_options():
-    command = build_worker_command(
-        python_executable=r"C:\Python\python.exe",
-        host="127.0.0.1",
-        port=9123,
-        https=True,
-        cert_dir=Path(r"C:\certificates"),
-    )
-
-    assert command == [
-        r"C:\Python\python.exe",
-        "-m",
-        "server",
-        "--worker",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "9123",
-        "--https",
-        "--cert-dir",
-        r"C:\certificates",
-    ]

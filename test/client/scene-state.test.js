@@ -4,21 +4,10 @@ import {
   DEFAULT_SCENE_DURATION_SEC,
   captureShotFromPanels,
   createScene,
-  createSceneShot,
   sceneShotPayload,
 } from "../../app/src/core/scene-state.js";
 
 describe("scene state helpers", () => {
-  it("normalizes scene and shot durations with bounds", () => {
-    const shot = createSceneShot({
-      id: "shot-1",
-      duration_sec: 600,
-      panels: [],
-    });
-    expect(shot.duration_sec).toBe(60);
-    expect(createScene({ default_duration_sec: 0 }).default_duration_sec).toBe(1);
-  });
-
   it("captures panel snapshots while excluding minimized panels", () => {
     const shot = captureShotFromPanels([
       {

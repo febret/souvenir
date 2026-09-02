@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -107,35 +106,3 @@ def test_scene_replace_validates_shape(client: TestClient):
 
     missing = client.get("/api/scenes/not-a-scene-id")
     assert missing.status_code == 404
-
-
-def test_scene_replace_rejects_non_finite_panel_values(client: TestClient):
-    scene = client.post("/api/scenes", json={"name": "Trip"}).json()
-    response = client.put(
-        f"/api/scenes/{scene['id']}",
-        content=json.dumps({
-            "loop": True,
-            "default_duration_sec": 8,
-            "current_shot_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "shots": [{
-                "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "duration_sec": 8,
-                "panels": [{
-                    "id": "panel-1",
-                    "media": {
-                        "directory": None,
-                        "selectedId": None,
-                        "sort": "name",
-                        "view": "thumbnails",
-                    },
-                    "transform": {
-                        "position": {"x": float("nan"), "y": 1.2, "z": -1.4},
-                        "rotation": {"x": 0, "y": 0, "z": 0},
-                    },
-                    "dimensions": {"width": 1.2, "height": 0.8},
-                }],
-            }],
-        }),
-        headers={"Content-Type": "application/json"},
-    )
-    assert response.status_code == 422

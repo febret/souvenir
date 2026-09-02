@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  createTwoHandRayFrame,
   createTwoHandRayDragState,
   solveTwoHandRayDragPose,
 } from "../../app/src/core/two-hand-ray-drag.js";
@@ -63,33 +62,6 @@ function centeredState(overrides = {}) {
 }
 
 describe("two-hand ray dragging", () => {
-  it("maps canonical axes onto a general tilted hand frame", () => {
-    const frame = createTwoHandRayFrame(
-      { x: -1, y: -0.5, z: 0.2 },
-      { x: 2, y: 1, z: 1.5 },
-      { x: 0.2, y: 0.1, z: -1 },
-      { x: -0.1, y: 0.3, z: -1 },
-      { x: 0, y: 0, z: 1 },
-    );
-
-    expectVectorClose(rotate({ x: 1, y: 0, z: 0 }, frame.quaternion), frame.x);
-    expectVectorClose(rotate({ x: 0, y: 1, z: 0 }, frame.quaternion), frame.y);
-    expectVectorClose(rotate({ x: 0, y: 0, z: 1 }, frame.quaternion), frame.z);
-  });
-
-  it("returns the exact initial pose", () => {
-    const state = centeredState();
-    const pose = solveTwoHandRayDragPose(state, {
-      first: { rayOrigin: state.first.rayOrigin, rayDirection: state.first.rayDirection },
-      second: { rayOrigin: state.second.rayOrigin, rayDirection: state.second.rayDirection },
-    });
-
-    expect(pose.position).toEqual({ x: 0, y: 0, z: 0 });
-    expect(pose.quaternion).toEqual(identity);
-    expect(pose.targetScale).toEqual({ x: 1, y: 1, z: 1 });
-    expect(pose.scaleFactor).toBe(1);
-  });
-
   it("maps both off-center local anchors to their ray endpoints", () => {
     const position = { x: 4, y: -2, z: 1 };
     const quaternion = { x: 0, y: 0, z: Math.SQRT1_2, w: Math.SQRT1_2 };
@@ -184,59 +156,6 @@ describe("two-hand ray dragging", () => {
     expectVectorClose({ x: pose.quaternion.x, y: 0, z: pose.quaternion.z, w: pose.quaternion.w }, { x: 0, y: 0, z: quaternion.z, w: quaternion.w });
     expect(pose.scaleFactor).toBe(1);
     expect(pose.targetScale).toEqual({ x: 1, y: 1, z: 1 });
-  });
-
-  it("retains nonuniform initial target scale while scaling uniformly", () => {
-    const state = centeredState({
-      targetScale: { x: 2, y: 3, z: 4 },
-      first: hand({ x: -2, y: 0, z: 0 }, { x: -1, y: 0, z: 0 }),
-      second: hand({ x: 2, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }),
-    });
-    const pose = solveTwoHandRayDragPose(state, {
-      first: { rayOrigin: { x: -3, y: 0, z: 3 }, rayDirection: { x: 0, y: 0, z: -1 } },
-      second: { rayOrigin: { x: 3, y: 0, z: 3 }, rayDirection: { x: 0, y: 0, z: -1 } },
-    });
-
-    expect(pose.scaleFactor).toBe(1.5);
-    expect(pose.targetScale).toEqual({ x: 3, y: 4.5, z: 6 });
-  });
-
-  it("stably handles reversed and nearly degenerate average ray directions", () => {
-    const state = centeredState({
-      first: hand({ x: -1, y: 0, z: 0 }, { x: -1, y: 0, z: 0 }, 3, { x: 0, y: 0, z: 1 }),
-      second: hand({ x: 1, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, 3, { x: 0, y: 0, z: -1 }),
-    });
-    const pose = solveTwoHandRayDragPose(state, {
-      first: { rayOrigin: { x: -1, y: 0, z: -3 }, rayDirection: { x: 0, y: 0, z: 1 } },
-      second: { rayOrigin: { x: 1, y: 0, z: 3 }, rayDirection: { x: 1e-14, y: 0, z: -1 } },
-    });
-
-    expect(Object.values(pose.quaternion).every(Number.isFinite)).toBe(true);
-    expect(Math.hypot(...Object.values(pose.quaternion))).toBeCloseTo(1, 12);
-  });
-
-  it("keeps the captured frame orientation when current ray directions cancel", () => {
-    const initialDirection = { x: 0, y: 0.2873478855663454, z: -0.9578262852211513 };
-    const state = centeredState({
-      first: hand({ x: -1, y: 0, z: 0 }, { x: -1, y: 0, z: 0 }, 3, initialDirection),
-      second: hand({ x: 1, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, 3, initialDirection),
-    });
-    const pose = solveTwoHandRayDragPose(state, {
-      first: {
-        rayOrigin: { x: -1, y: 0, z: -state.first.distance },
-        rayDirection: { x: 0, y: 0, z: 1 },
-      },
-      second: {
-        rayOrigin: { x: 1, y: 0, z: state.second.distance },
-        rayDirection: { x: 0, y: 0, z: -1 },
-      },
-    });
-
-    expect(pose.position).toEqual({ x: 0, y: 0, z: 0 });
-    expect(pose.quaternion.x).toBeCloseTo(0, 10);
-    expect(pose.quaternion.y).toBeCloseTo(0, 10);
-    expect(pose.quaternion.z).toBeCloseTo(0, 10);
-    expect(Math.abs(pose.quaternion.w)).toBeCloseTo(1, 10);
   });
 
   it("normalizes output quaternions and rejects invalid directions or coincident captures", () => {

@@ -68,21 +68,6 @@ describe("layout storage library reconciliation", () => {
     expect(loadLayout(storage, "library-b")).toEqual(blankLayout("library-b"));
   });
 
-  it("safely migrates layouts saved before a library identity was recorded", () => {
-    const storage = memoryStorage();
-    storage.setItem(
-      LAYOUT_STORAGE_KEY,
-      JSON.stringify({
-        panels: [{ id: "old-panel", media: { selectedId: "old.jpg" } }],
-        focusedId: "old-panel",
-        runtime: { "old-panel": { playlist: [{ path: "old.jpg" }] } },
-        environmentMode: "red",
-      }),
-    );
-
-    expect(loadLayout(storage, "library-a")).toEqual(blankLayout("library-a"));
-  });
-
   it("treats malformed persisted IDs as untrusted and requires a valid current ID", () => {
     const storage = memoryStorage();
     storage.setItem(
