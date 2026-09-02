@@ -21,7 +21,7 @@ import {
 } from "../core/erase-mask.js";
 import { SpatialSlider } from "./spatial-slider.js";
 import { PanelOptionsView } from "./panel-options-view.js";
-import { createDisplacedPlaneGeometry, resolveFadeDepthRange } from "./depth-surface.js";
+import { createDisplacedPlaneGeometry } from "./depth-surface.js";
 import { ADM_SLIDER_ROW_STEP } from "./panel-options/constants.js";
 
 const DOUBLE_TAP_WINDOW_MS = 325;
@@ -193,9 +193,9 @@ const PANEL_SURFACE_FRAGMENT_SHADER = `
     float blurMix = smoothstep(0.0, 1.0, radiusPx / 12.0);
     vec4 color = mix(center, blurred, blurMix);
 
-    if (uFadeEnabled > 0.5 && uUseDepth > 0.5) {
-      float fadeSpan = max(0.0001, uFadeEndDepth - uFadeStartDepth);
-      float fadeProgress = clamp((depthValue - uFadeStartDepth) / fadeSpan, 0.0, 1.0);
+    if (uFadeEnabled > 0.5 && uUseDepth > 0.5 && uFadeStartDepth > 0.0) {
+      float fadeSpan = max(0.0001, uFadeStartDepth);
+      float fadeProgress = clamp(1.0 - depthValue / fadeSpan, 0.0, 1.0);
       float fadeAlpha = 1.0 - fadeProgress;
       color.a *= fadeAlpha;
     }
@@ -245,7 +245,7 @@ function createSurfaceMaterial(texture) {
   const material = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: true,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
     toneMapped: false,
     uniforms: {
       uMap: { value: fallback },
@@ -261,8 +261,8 @@ function createSurfaceMaterial(texture) {
       uFocalDepth: { value: 0.5 },
       uFocusBlurScale: { value: 1 },
       uFadeEnabled: { value: 0 },
-      uFadeStartDepth: { value: 0.5 },
-      uFadeEndDepth: { value: 1 },
+      uFadeStartDepth: { value: 0 },
+      uFadeEndDepth: { value: 0 },
       uMaskEnabled: { value: 0 },
       uAlphaTest: { value: 0 },
       uLightFxEnabled: { value: 0 },
@@ -1213,13 +1213,15 @@ export class PanelView extends THREE.Group {
       enabled: Boolean(shouldDisplace),
       intensity: this.depthIntensity,
       mediaType: this.mediaType,
+      softDepthBlur: this.softDepthEnabled ? this.softDepthBlur : 0,
     };
     const previous = this.depthGeometryState;
     if (previous
       && previous.canvas === nextState.canvas
       && previous.enabled === nextState.enabled
       && previous.intensity === nextState.intensity
-      && previous.mediaType === nextState.mediaType) {
+      && previous.mediaType === nextState.mediaType
+      && previous.softDepthBlur === nextState.softDepthBlur) {
       return;
     }
     this.depthGeometryState = nextState;
@@ -1246,6 +1248,7 @@ export class PanelView extends THREE.Group {
     } = createDisplacedPlaneGeometry(
       this.depthMapCanvas,
       this.depthIntensity,
+      this.softDepthEnabled ? this.softDepthBlur : 0,
       this.depthMapCanvas?.userData?.gridSegments,
     );
     this.surface.geometry = geometry;
@@ -1276,11 +1279,14 @@ export class PanelView extends THREE.Group {
     material.uniforms.uSoftBlurPx.value = this.softDepthBlur;
     material.uniforms.uFocusEnabled.value = this.focusBlurEnabled ? 1 : 0;
     material.uniforms.uFadeEnabled.value = this.fadeDepthEnabled ? 1 : 0;
-    const { startDepth, endDepth } = resolveFadeDepthRange(
-      this.fadeDepthStart,
-      useDepth ? this.minimumDepthSample : 0,
-      useDepth ? this.maximumDepthSample : 1,
-    );
+    // const { startDepth, endDepth } = resolveFadeDepthRange(
+    //   this.fadeDepthStart,
+    //   useDepth ? this.minimumDepthSample : 0,
+    //   useDepth ? this.maximumDepthSample : 1,
+    // );
+    const startDepth = useDepth ? this.fadeDepthStart : 0;
+    const endDepth = 0;
+
     material.uniforms.uFadeStartDepth.value = startDepth;
     material.uniforms.uFadeEndDepth.value = endDepth;
     material.uniforms.uMaskEnabled.value = this.alphaMapTexture ? 1 : 0;

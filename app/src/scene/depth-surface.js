@@ -2,26 +2,6 @@ import * as THREE from "three";
 
 const MAX_GRID_SEGMENTS = 256;
 
-function clampDepthSample(value) {
-  return Math.max(0, Math.min(1, Number(value) || 0));
-}
-
-/**
- * Maps the normalized fade start control to a depth-map sample range.
- * 0 => minimum sampled depth (front), 1 => maximum sampled depth (back).
- * Fade always ends at maximum sampled depth (back).
- */
-export function resolveFadeDepthRange(normalizedStart, minimumSampleDepth, maximumSampleDepth) {
-  const minimum = clampDepthSample(minimumSampleDepth);
-  const maximum = clampDepthSample(maximumSampleDepth);
-  const rangeMin = Math.min(minimum, maximum);
-  const rangeMax = Math.max(minimum, maximum);
-  const start = clampDepthSample(normalizedStart);
-  return {
-    startDepth: rangeMin + (rangeMax - rangeMin) * start,
-    endDepth: rangeMax,
-  };
-}
 
 /**
  * Builds the displaced image plane used by panel depth mode. Keeping this CPU
@@ -30,6 +10,7 @@ export function resolveFadeDepthRange(normalizedStart, minimumSampleDepth, maxim
 export function createDisplacedPlaneGeometry(
   depthCanvas,
   intensity = 0.35,
+  softDepthBlur = 0,
   segments,
 ) {
   const safeIntensity = Math.max(0, Math.min(3, Number(intensity) || 0));
@@ -38,11 +19,16 @@ export function createDisplacedPlaneGeometry(
   const gridSegments = Number.isFinite(segments)
     ? Math.max(1, Math.min(MAX_GRID_SEGMENTS, Math.trunc(segments)))
     : Math.min(MAX_GRID_SEGMENTS, Math.min(width, height));
+  // TODO: Why do we need to draw the depth canvas onto a separate probe canvas? 
+  // Can we read pixels directly?
   const probe = document.createElement("canvas");
   probe.width = width;
   probe.height = height;
   const context = probe.getContext("2d", { willReadFrequently: true });
+  const blurPx = Math.max(0, Number(softDepthBlur) || 0);
+  context.filter = blurPx > 0 ? `blur(${blurPx}px)` : "none";
   context.drawImage(depthCanvas, 0, 0, width, height);
+  context.filter = "none";
   const pixels = context.getImageData(0, 0, width, height).data;
   let minimumSampleDepth = 1;
   let maximumSampleDepth = 0;
