@@ -221,6 +221,11 @@ folders. The current tag is shown at the top; click the cells that match it,
 then choose **Next tag →** to move to the next tag. Once every tag has been
 applied to a batch, the batch is saved and the next batch loads.
 
+The header's **Max tags** toggle restricts the grid to pictures and videos that
+currently have **one or fewer tags**, so you can focus on unfinished items.
+Toggling it reloads the challenge pool; the current session restarts with the
+matching media only.
+
 The header's **Delete Picture** control toggles delete mode. With delete mode
 on, clicking a picture or video moves it to
 `<media home>/.trashcan` and the grid refills from the remaining pool. Tag

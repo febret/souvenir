@@ -1,5 +1,5 @@
 import { isVideo, normalizeMediaEntry } from "../core/media.js";
-import { normalizeTagDefinitions } from "../core/tags.js";
+import { normalizeTagDefinitions, normalizeTagIds } from "../core/tags.js";
 
 const GRID_SIZE = 9;
 
@@ -76,6 +76,8 @@ export class TaggingController {
       commentaryState: document.querySelector("#tagging-commentary-state"),
       deleteModeBtn: document.querySelector("#tagging-delete-mode"),
       deleteModeState: document.querySelector("#tagging-delete-state"),
+      maxTagsToggle: document.querySelector("#tagging-max-tags"),
+      maxTagsState: document.querySelector("#tagging-max-tags-state"),
       comboBanner: document.querySelector("#tagging-combo-banner"),
       comboMultiplier: document.querySelector("#tagging-combo-multiplier"),
       comboText: document.querySelector("#tagging-combo-text"),
@@ -145,6 +147,9 @@ export class TaggingController {
       this.#setCommentaryEnabled(this.elements.commentaryToggle.checked);
     });
     this.elements.deleteModeBtn.addEventListener("click", () => this.#toggleDeleteMode());
+    this.elements.maxTagsToggle.addEventListener("change", () => {
+      this.#setMaxTagsFilter(this.elements.maxTagsToggle.checked);
+    });
     this.document.addEventListener("keydown", this.handleKeydown);
   }
 
@@ -198,6 +203,7 @@ export class TaggingController {
     this.#renderTimers();
     this.#renderRemainingProgress();
     this.#refreshCommentaryUi();
+    this.elements.maxTagsState.textContent = this.elements.maxTagsToggle.checked ? "≤ 1" : "Any";
   }
 
   #startTicker() {
@@ -232,8 +238,13 @@ export class TaggingController {
         return;
       }
 
-      if (allEntries.length === 0) {
-        this.#setStatus("No media files found in the selected folders.");
+      const poolEntries = this.#applyMaxTagsFilter(allEntries);
+      if (poolEntries.length === 0) {
+        this.#setStatus(
+          this.elements.maxTagsToggle.checked
+            ? "No media with 1 or fewer tags found in the selected folders."
+            : "No media files found in the selected folders.",
+        );
         this.elements.tagLabel.textContent = "No files found";
         this.elements.tagProgress.textContent = "";
         return;
@@ -247,7 +258,7 @@ export class TaggingController {
         return;
       }
 
-      this.allFiles = allEntries.sort((left, right) => {
+      this.allFiles = poolEntries.sort((left, right) => {
         const leftCount = (left.tag_ids ?? []).length;
         const rightCount = (right.tag_ids ?? []).length;
         return leftCount !== rightCount ? leftCount - rightCount : Math.random() - 0.5;
@@ -291,6 +302,22 @@ export class TaggingController {
       }
     }
     return allEntries;
+  }
+
+  #applyMaxTagsFilter(entries) {
+    if (!this.elements.maxTagsToggle.checked) {
+      return entries;
+    }
+    return entries.filter((entry) => normalizeTagIds(entry?.tag_ids).length <= 1);
+  }
+
+  #setMaxTagsFilter(enabled) {
+    this.elements.maxTagsToggle.checked = Boolean(enabled);
+    this.elements.maxTagsState.textContent = this.elements.maxTagsToggle.checked ? "≤ 1" : "Any";
+    if (this.saving) {
+      return;
+    }
+    void this.#loadAndStart();
   }
 
   #pickGrid() {

@@ -66,6 +66,9 @@ describe("browse tag-count filters", () => {
 
   it("matches the requested count ranges", () => {
     expect(matchesTagCountFilter(entry(0), "0")).toBe(true);
+    expect(matchesTagCountFilter(entry(0), "<=1")).toBe(true);
+    expect(matchesTagCountFilter(entry(1), "<=1")).toBe(true);
+    expect(matchesTagCountFilter(entry(2), "<=1")).toBe(false);
     expect(matchesTagCountFilter(entry(1), "1-2")).toBe(true);
     expect(matchesTagCountFilter(entry(2), "1-2")).toBe(true);
     expect(matchesTagCountFilter(entry(3), "3-10")).toBe(true);

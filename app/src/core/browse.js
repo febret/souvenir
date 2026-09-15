@@ -14,6 +14,8 @@ export function matchesTagCountFilter(entry, filter) {
       return count >= 3 && count <= 10;
     case "10+":
       return count >= 10;
+    case "<=1":
+      return count <= 1;
     default:
       return true;
   }

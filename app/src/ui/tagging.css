@@ -200,7 +200,7 @@
 
 .tagging-stats {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(9, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -234,7 +234,8 @@
   cursor: pointer;
 }
 
-.tagging-commentary-toggle {
+.tagging-commentary-toggle,
+.tagging-max-tags-toggle {
   position: relative;
   display: inline-flex;
   width: 40px;
@@ -242,14 +243,16 @@
   align-items: center;
 }
 
-.tagging-commentary-toggle input {
+.tagging-commentary-toggle input,
+.tagging-max-tags-toggle input {
   position: absolute;
   inset: 0;
   opacity: 0;
   cursor: pointer;
 }
 
-.tagging-commentary-toggle span {
+.tagging-commentary-toggle span,
+.tagging-max-tags-toggle span {
   position: relative;
   width: 100%;
   height: 100%;
@@ -259,7 +262,8 @@
   transition: background 0.2s, box-shadow 0.2s;
 }
 
-.tagging-commentary-toggle span::after {
+.tagging-commentary-toggle span::after,
+.tagging-max-tags-toggle span::after {
   position: absolute;
   top: 2px;
   left: 2px;
@@ -272,17 +276,23 @@
   content: "";
 }
 
-.tagging-commentary-toggle input:checked + span {
+.tagging-commentary-toggle input:checked + span,
+.tagging-max-tags-toggle input:checked + span {
   background: linear-gradient(90deg, #2cb76a, #72e8a5);
   box-shadow: 0 0 16px rgba(114, 232, 165, 0.45);
 }
 
-.tagging-commentary-toggle input:checked + span::after {
+.tagging-commentary-toggle input:checked + span::after,
+.tagging-max-tags-toggle input:checked + span::after {
   transform: translateX(16px);
 }
 
 .tagging-commentary-toggle input:disabled + span {
   opacity: 0.4;
+}
+
+.tagging-stat-card--untagged {
+  cursor: pointer;
 }
 
 .tagging-stat-card--delete {
