@@ -138,12 +138,23 @@ querying a persistent index.
   - `.souvenir-certs`
   - `.souvenir-thumbnails`
   - `.souvenir-masks`
+  - `.souvenir-depth`
+  - `.trashcan`
 - The internal `.souvenir-tags.json` state file is likewise excluded from media
   listings and direct file/thumbnail access.
 
 Metadata contains relative path, type, size, modification time, and generated
 file/thumbnail URLs. The server does not expose host filesystem paths as media
 identifiers.
+
+`DELETE /api/media` (see API surface below) moves a validated media file into
+`<media root>/.trashcan`, mirroring the file's relative directory structure and
+uniquifying collisions with a numeric suffix. The move is the authoritative
+step; afterwards the server purges that media's derived state (media tag
+assignments, ADM settings, mask, depth map, cached thumbnail, and any queued
+auto mask/depth jobs). `.trashcan` follows the same containment rules as the
+other internal directories and is excluded from scans, listings, and direct
+media routes.
 
 ### API surface
 
@@ -153,6 +164,7 @@ identifiers.
 | `GET /api/library-status` | First-load scan progress plus `library_id` |
 | `GET /api/tree` | Recursive directory metadata |
 | `GET /api/media?path=` | One directory's child directories and media entries |
+| `DELETE /api/media?path=` | Move a validated media file to the internal `.trashcan` and purge its derived state |
 | `POST /api/uploads` | Validate and store one or more uploaded images under `<media_home>/<upload_dirname>` |
 | `GET, HEAD /api/file?path=` | Full or single-range media streaming |
 | `GET /api/thumbnail?path=` | Cached JPEG image thumbnail or video placeholder |
@@ -533,6 +545,7 @@ reliably darken passthrough.
 | Panels, transforms, media state, environment mode, runtime playlists | `souvenir.layout.v1` in localStorage | Browser/device + `library_id` |
 | Thumbnail JPEGs | `<media root>/.souvenir-thumbnails` | Server/library |
 | Erase masks and blur metadata | `<media root>/.souvenir-masks` | Server/library, shared by all panels/clients |
+| Deleted media | `<media root>/.trashcan` | Server/library, excluded from all media routes |
 | Tag definitions and media assignments | `<media root>/.souvenir-tags.json` | Server/library, shared by all panels/clients |
 | Commentary tags, captions, and volume | `<media root>/.souvenir-tags.json` | Server/library, per-sound metadata |
 | Commentary audio bytes | `SOUVENIR_COMMENTARY_DIR` | Optional server audio library |
@@ -550,7 +563,7 @@ caption text and per-sound volume remain server-owned.
 ## Reliability and security boundaries
 
 - The server is authoritative for filesystem containment and supported media.
-- Internal cache/certificate/mask paths and `.souvenir-tags.json` are
+- Internal cache/certificate/mask/trash paths and `.souvenir-tags.json` are
   inaccessible through general media routes.
 - The client treats API failures as user-visible errors rather than successful
   empty results. `MediaApi` consumes error bodies once and preserves either JSON

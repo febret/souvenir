@@ -213,6 +213,22 @@ controls. Images start fitted to the window and support:
 Use the back arrow in the Browse mode title bar, or press Escape outside a
 preview, to return to the Portal.
 
+### Tagging mode
+
+The **Tag your memories** button on the Portal opens the full-screen tagging
+mode: a 3×3 grid of the least-tagged pictures and videos from your selected
+folders. The current tag is shown at the top; click the cells that match it,
+then choose **Next tag →** to move to the next tag. Once every tag has been
+applied to a batch, the batch is saved and the next batch loads.
+
+The header's **Delete Picture** control toggles delete mode. With delete mode
+on, clicking a picture or video moves it to
+`<media home>/.trashcan` and the grid refills from the remaining pool. Tag
+selections already made on the other cells stay intact. Click **Delete
+Picture** again (or press **Next tag →**) to return to normal tagging. Deleted
+media disappears from the gallery and all media APIs; the `.trashcan` folder is
+internal and can be inspected or restored from the media home on the computer.
+
 ## 3. Hand controls
 
 Souvenir needs no controllers:

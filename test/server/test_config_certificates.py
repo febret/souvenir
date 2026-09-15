@@ -34,6 +34,17 @@ def test_configuration_rejects_invalid_upload_dirname(monkeypatch, tmp_path):
         raise AssertionError("invalid upload dirname should be rejected")
 
 
+def test_configuration_rejects_trash_upload_dirname(monkeypatch, tmp_path):
+    monkeypatch.setenv("SOUVENIR_MEDIA_HOME", str(tmp_path))
+    monkeypatch.setenv("SOUVENIR_UPLOAD_DIRNAME", ".trashcan")
+    try:
+        load_settings()
+    except RuntimeError as error:
+        assert "trash directory" in str(error)
+    else:
+        raise AssertionError("trash upload dirname should be rejected")
+
+
 def test_library_id_is_stable_distinct_and_path_safe(tmp_path):
     first_root = tmp_path / "private-library"
     second_root = tmp_path / "different-library"

@@ -410,6 +410,7 @@
             <option value="1-2">1–2 tags</option>
             <option value="3-10">3–10 tags</option>
             <option value="10+">10+ tags</option>
+            <option value="<=1">Less than or equal to 1 tag</option>
           </select>
         </label>
         <button id="browse-up" class="secondary-button compact-button" type="button">Up one folder</button>
@@ -454,8 +455,6 @@
           <p class="tagging-kicker">TAGGING MODE</p>
           <h2 class="tagging-title">Tag your memories</h2>
         </div>
-        <span id="tagging-round-badge" class="tagging-round-badge" role="status"></span>
-      </header>
       <div class="tagging-session-hud">
         <div class="tagging-remaining-panel">
           <p id="tagging-remaining-text" class="tagging-remaining-text">0 images remaining</p>
@@ -492,6 +491,10 @@
             </span>
             <strong id="tagging-commentary-state">Off</strong>
           </label>
+          <button id="tagging-delete-mode" class="tagging-stat-card tagging-stat-card--delete" type="button" aria-pressed="false">
+            <span>Delete Picture</span>
+            <strong id="tagging-delete-state">Off</strong>
+          </button>
           <div class="tagging-stat-card tagging-stat-card--score">
             <span>Score</span>
             <strong id="tagging-score">0</strong>
@@ -503,15 +506,12 @@
           <div id="tagging-tag-label" class="tagging-tag-label" aria-live="polite"></div>
           <div id="tagging-tag-progress" class="tagging-tag-progress"></div>
         </div>
-        <div class="tagging-progress-track" aria-hidden="true">
-          <div id="tagging-progress-fill" class="tagging-progress-fill"></div>
-        </div>
         <button id="tagging-next" class="tagging-next-btn" type="button" disabled>
           Next tag →
         </button>
       </div>
+      </header>
       <div class="tagging-grid-area">
-        <p class="tagging-hint">Click any image to apply the current tag · already-tagged files are dimmed</p>
         <div id="tagging-grid" class="tagging-grid" role="list" aria-label="Media files for tagging"></div>
       </div>
       <p id="tagging-status" class="tagging-status" role="status" aria-live="polite" hidden></p>

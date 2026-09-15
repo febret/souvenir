@@ -14,11 +14,12 @@ from .auto_depth import AutoDepthGenerator, AutoDepthService
 from .auto_mask import AutoMaskGenerator, AutoMaskService
 from .commentary import commentary_entries, commentary_type, resolve_commentary_file
 from .depth_maps import MAX_DEPTH_MAP_BYTES, DepthMapStore
-from .media import content_type, is_allowed, is_internal_path, is_media, media_type, metadata, parse_included_dirs, relative_text, resolve_under_root
+from .media import cache_path, content_type, is_allowed, is_internal_path, is_media, media_type, metadata, parse_included_dirs, relative_text, resolve_under_root
 from .scenes import SceneStore
 from .masks import MAX_MASK_BYTES, MaskStore
 from .tags import DEFAULT_ADM_DEPTH_INTENSITY, TagStore
 from .thumbnails import create_thumbnail
+from .trash import move_media
 
 _RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
 MAX_UPLOAD_IMAGE_BYTES = 64 * 1024 * 1024
@@ -417,6 +418,29 @@ def add_routes(
         except OSError as error:
             raise HTTPException(500, "thumbnail generation failed") from error
         return FileResponse(cached, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+    @app.delete("/api/media")
+    def delete_media(path: str):
+        source, relative = resolve_under_root(root, path, directory=False)
+        _reject_internal_path(relative)
+        if media_type(source) is None:
+            raise HTTPException(404, "unsupported media type")
+        move_media(root, relative)
+        tags.remove_media(relative)
+        masks.delete(relative)
+        depth_maps.delete(relative)
+        try:
+            cache = cache_path(root, relative)
+            if cache.is_file() and not cache.is_symlink():
+                cache.unlink()
+        except OSError as error:
+            raise HTTPException(
+                500,
+                "media was trashed but its cached thumbnail could not be removed",
+            ) from error
+        auto_masks.cancel(relative)
+        auto_depth.cancel(relative)
+        return _no_store({"path": relative_text(relative), "trashed": True})
 
     @app.get("/api/mask-info")
     def mask_info(path: str):

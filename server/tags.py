@@ -298,6 +298,14 @@ class TagStore:
                 **payload,
             }
 
+    def remove_media(self, relative: Path) -> None:
+        path = relative_text(relative)
+        with self._lock:
+            state = self._load()
+            state["media_assignments"].pop(path, None)
+            state["media_adm_settings"].pop(path, None)
+            self._save(state)
+
     def _tag_ids(self, namespace: str, relative: Path) -> list[str]:
         with self._lock:
             state = self._load()

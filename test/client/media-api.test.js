@@ -40,4 +40,21 @@ describe("MediaApi errors", () => {
       }),
     );
   });
+
+  it("sends a DELETE request with a path query parameter", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ path: "albums/photo.jpg", trashed: true }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetch);
+    vi.stubGlobal("window", { location: { origin: "http://localhost" } });
+
+    const result = await new MediaApi().deleteMedia("albums/photo.jpg");
+
+    expect(result).toEqual({ path: "albums/photo.jpg", trashed: true });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [url, options] = fetch.mock.calls[0];
+    expect(url.toString()).toBe("http://localhost/api/media?path=albums%2Fphoto.jpg");
+    expect(options).toEqual(expect.objectContaining({ method: "DELETE", cache: "no-store" }));
+  });
 });

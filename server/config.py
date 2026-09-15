@@ -5,6 +5,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .media import TRASH_DIRECTORY
+
 MEDIA_HOME_ENV = "SOUVENIR_MEDIA_HOME"
 COMMENTARY_DIR_ENV = "SOUVENIR_COMMENTARY_DIR"
 PORT_ENV = "SOUVENIR_PORT"
@@ -73,6 +75,8 @@ def upload_dirname() -> str:
         raise RuntimeError(f"{UPLOAD_DIRNAME_ENV} must be a single directory name")
     if value.startswith("~") or value.startswith(".souvenir-"):
         raise RuntimeError(f"{UPLOAD_DIRNAME_ENV} must not target internal Souvenir storage")
+    if value == TRASH_DIRECTORY:
+        raise RuntimeError(f"{UPLOAD_DIRNAME_ENV} must not target the trash directory")
     if os.path.isabs(value) or os.path.splitdrive(value)[0]:
         raise RuntimeError(f"{UPLOAD_DIRNAME_ENV} must be relative")
     return value

@@ -101,18 +101,6 @@
   color: #e8f5ef;
 }
 
-.tagging-round-badge {
-  margin-left: auto;
-  padding: 5px 12px;
-  border: 1px solid rgba(114, 232, 165, 0.3);
-  border-radius: 999px;
-  color: #72e8a5;
-  font-size: 0.72rem;
-  font-weight: 650;
-  background: rgba(114, 232, 165, 0.08);
-  flex-shrink: 0;
-}
-
 .tagging-session-hud {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) 2fr;
@@ -212,7 +200,7 @@
 
 .tagging-stats {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -295,6 +283,29 @@
 
 .tagging-commentary-toggle input:disabled + span {
   opacity: 0.4;
+}
+
+.tagging-stat-card--delete {
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.tagging-stat-card--delete strong {
+  transition: color 0.2s;
+}
+
+.tagging-shell--delete-mode .tagging-stat-card--delete,
+.tagging-stat-card--delete[aria-pressed="true"] {
+  border-color: rgba(255, 70, 70, 0.6);
+  background:
+    radial-gradient(circle at 40% 0%, rgba(255, 70, 70, 0.26), transparent 55%),
+    rgba(30, 8, 8, 0.88);
+}
+
+.tagging-shell--delete-mode .tagging-stat-card--delete strong,
+.tagging-stat-card--delete[aria-pressed="true"] strong {
+  color: #ff6b6b;
 }
 
 .tagging-stat-card--score {
@@ -429,35 +440,6 @@
   position: relative;
   z-index: 1;
   text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
-}
-
-.tagging-progress-track {
-  width: 230px;
-  height: 18px;
-  border: 1px solid rgba(183, 233, 211, 0.2);
-  border-radius: 999px;
-  background:
-    linear-gradient(180deg, rgba(190, 221, 209, 0.07), rgba(18, 26, 28, 0.58));
-  overflow: hidden;
-  flex-shrink: 0;
-  box-shadow:
-    inset 0 3px 6px rgba(0, 0, 0, 0.35),
-    0 0 18px rgba(91, 215, 149, 0.08);
-}
-
-.tagging-progress-fill {
-  height: 100%;
-  width: 0%;
-  border-radius: 999px;
-  background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.22), transparent 28%),
-    linear-gradient(90deg, #26b96b 0%, #72e8a5 52%, #bbffe2 100%);
-  background-size: 160px 100%, 100% 100%;
-  transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow:
-    0 0 18px rgba(114, 232, 165, 0.45),
-    0 0 34px rgba(114, 232, 165, 0.16);
-  animation: tagging-remaining-shimmer 1.1s linear infinite;
 }
 
 .tagging-next-btn {
@@ -640,6 +622,44 @@
   color: #72e8a5;
   text-shadow: 0 2px 12px rgba(114, 232, 165, 0.7);
   filter: drop-shadow(0 0 8px #72e8a5);
+}
+
+/* ─── Delete mode ────────────────────────────────────────────────────── */
+
+.tagging-shell--delete-mode .tagging-cell:hover {
+  border-color: rgba(255, 70, 70, 0.55);
+  box-shadow: 0 4px 22px rgba(255, 70, 70, 0.18);
+}
+
+.tagging-shell--delete-mode .tagging-cell-opacity {
+  filter: grayscale(20%);
+}
+
+.tagging-shell--delete-mode .tagging-cell-overlay {
+  background: rgba(255, 70, 70, 0.14);
+}
+
+.tagging-shell--delete-mode .tagging-cell-overlay::after {
+  content: "✕";
+  font-size: 2.4rem;
+  font-weight: 700;
+  color: #ff5454;
+  text-shadow: 0 2px 12px rgba(255, 70, 70, 0.7);
+  filter: drop-shadow(0 0 8px rgba(255, 70, 70, 0.6));
+  transition: transform 0.15s;
+}
+
+.tagging-shell--delete-mode .tagging-cell:hover .tagging-cell-overlay {
+  opacity: 1;
+  background: rgba(255, 70, 70, 0.3);
+}
+
+.tagging-shell--delete-mode .tagging-cell:hover .tagging-cell-overlay::after {
+  transform: scale(1.15);
+}
+
+.tagging-shell--delete-mode .tagging-cell-check {
+  opacity: 0;
 }
 
 /* ─── Filename label ─────────────────────────────────────────────────── */
@@ -902,7 +922,6 @@
   gap: 4px !important;
 }
 
-.tagging-round-badge,
 .tagging-title,
 .tagging-final-score,
 .tagging-final-records {

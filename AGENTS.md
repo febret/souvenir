@@ -122,7 +122,10 @@ Internal media-root data:
 - `.souvenir-certs/`
 - `.souvenir-thumbnails/`
 - `.souvenir-masks/`
+- `.souvenir-depth/`
+- `.trashcan/`
 - `.souvenir-tags.json`
+- `.souvenir-scenes.json`
 
 When adding a new internal file or directory, exclude it consistently from
 listing, scanning, direct media access, and tests.

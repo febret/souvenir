@@ -50,6 +50,8 @@ export class TaggingController {
     this.bestComboCount = 1;
     this.commentaryEnabled = false;
     this.commentaryPlayingPath = null;
+    this.deleteMode = false;
+    this.deletingPaths = new Set();
     this.commentary = [];
     this.usedCommentaryPaths = new Set();
     this.tagActions = 0;
@@ -72,6 +74,8 @@ export class TaggingController {
       combo: document.querySelector("#tagging-combo"),
       commentaryToggle: document.querySelector("#tagging-commentary-enabled"),
       commentaryState: document.querySelector("#tagging-commentary-state"),
+      deleteModeBtn: document.querySelector("#tagging-delete-mode"),
+      deleteModeState: document.querySelector("#tagging-delete-state"),
       comboBanner: document.querySelector("#tagging-combo-banner"),
       comboMultiplier: document.querySelector("#tagging-combo-multiplier"),
       comboText: document.querySelector("#tagging-combo-text"),
@@ -90,8 +94,6 @@ export class TaggingController {
       grid: document.querySelector("#tagging-grid"),
       nextBtn: document.querySelector("#tagging-next"),
       status: document.querySelector("#tagging-status"),
-      roundBadge: document.querySelector("#tagging-round-badge"),
-      progressBar: document.querySelector("#tagging-progress-fill"),
     };
 
     this.commentaryAudio = document.createElement("audio");
@@ -142,6 +144,7 @@ export class TaggingController {
     this.elements.commentaryToggle.addEventListener("change", () => {
       this.#setCommentaryEnabled(this.elements.commentaryToggle.checked);
     });
+    this.elements.deleteModeBtn.addEventListener("click", () => this.#toggleDeleteMode());
     this.document.addEventListener("keydown", this.handleKeydown);
   }
 
@@ -149,6 +152,7 @@ export class TaggingController {
     this.elements.shell.hidden = false;
     this.elements.shell.inert = false;
     this.#hideExitSummary();
+    this.#setDeleteMode(false);
     this.#resetSessionStats();
     this.#startTicker();
     this.elements.exit.focus();
@@ -161,6 +165,7 @@ export class TaggingController {
       window.clearTimeout(this.comboBannerTimerId);
       this.comboBannerTimerId = null;
     }
+    this.#setDeleteMode(false);
     this.elements.shell.hidden = true;
     this.elements.shell.inert = true;
     this.#hideExitSummary();
@@ -259,7 +264,6 @@ export class TaggingController {
       this.tagActions = 0;
       this.usedCommentaryPaths.clear();
 
-      this.#renderRound();
       this.#renderTag();
       this.#renderGrid();
       this.#renderTimers();
@@ -300,19 +304,11 @@ export class TaggingController {
     return this.tagQueue[this.currentTagIndex] ?? null;
   }
 
-  #renderRound() {
-    const remaining = this.allFiles.length;
-    this.elements.roundBadge.textContent = remaining > 0
-      ? `${remaining} file${remaining !== 1 ? "s" : ""} remaining`
-      : "Last batch!";
-  }
-
   #renderTag() {
     const tag = this.#currentTag;
     if (!tag) {
       this.elements.tagLabel.textContent = "All tags done!";
       this.elements.tagProgress.textContent = "";
-      this.elements.progressBar.style.width = "100%";
       this.elements.nextBtn.textContent = "New batch →";
       this.#renderTagBackground(null);
       return;
@@ -322,7 +318,6 @@ export class TaggingController {
     const pct = this.tagQueue.length > 0
       ? Math.round((this.currentTagIndex / this.tagQueue.length) * 100)
       : 0;
-    this.elements.progressBar.style.width = `${pct}%`;
     this.elements.nextBtn.textContent = "Next tag →";
     this.#renderTagBackground(tag);
     this.#refreshCommentaryUi();
@@ -685,7 +680,13 @@ export class TaggingController {
     cell.appendChild(overlay);
     cell.appendChild(filename);
 
-    cell.addEventListener("click", () => this.#toggleTag(cell, file));
+    cell.addEventListener("click", () => {
+      if (this.deleteMode) {
+        this.#deleteCell(cell, file);
+        return;
+      }
+      this.#toggleTag(cell, file);
+    });
     cell.addEventListener("animationend", () => {
       cell.classList.remove("tagging-cell--enter");
     }, { once: true });
@@ -735,10 +736,77 @@ export class TaggingController {
     }, { once: true });
   }
 
+  #toggleDeleteMode() {
+    if (this.saving) {
+      return;
+    }
+    this.#setDeleteMode(!this.deleteMode);
+  }
+
+  #setDeleteMode(enabled) {
+    this.deleteMode = Boolean(enabled);
+    this.elements.deleteModeBtn.setAttribute("aria-pressed", String(this.deleteMode));
+    this.elements.deleteModeState.textContent = this.deleteMode ? "On" : "Off";
+    this.elements.shell.classList.toggle("tagging-shell--delete-mode", this.deleteMode);
+    if (this.deleteMode && this.allFiles.length > 0) {
+      this.#setStatus("Delete mode: click a picture or video to delete it. Click Delete Picture again to cancel.");
+    } else {
+      this.#setStatus("");
+    }
+  }
+
+  #deleteCell(cell, file) {
+    if (this.saving || this.deletingPaths.has(file.path)) {
+      return;
+    }
+    this.deletingPaths.add(file.path);
+    const filename = file.path.split("/").at(-1) ?? file.path;
+    this.#setStatus(`Deleting ${filename}…`);
+    cell.classList.add("tagging-cell--delete-busy");
+
+    this.api.deleteMedia(file.path)
+      .then(() => {
+        this.deletingPaths.delete(file.path);
+        cell.querySelectorAll("video").forEach((video) => video.pause());
+        this.allFiles = this.allFiles.filter((entry) => entry.path !== file.path);
+        const index = this.gridFiles.findIndex((entry) => entry.path === file.path);
+        if (index !== -1) {
+          this.gridFiles.splice(index, 1);
+        }
+        cell.remove();
+        this.#refillGrid();
+        this.#renderRemainingProgress();
+        if (this.allFiles.length === 0) {
+          this.#setDeleteMode(false);
+          this.#setStatus("All media deleted. Reloading an empty set…");
+          return;
+        }
+        this.#setStatus("Deleted. Click another picture to continue, or click Delete Picture to cancel.");
+      })
+      .catch((error) => {
+        this.deletingPaths.delete(file.path);
+        this.#setStatus(`Could not delete ${filename}.`);
+        this.onError(error);
+      });
+  }
+
+  #refillGrid() {
+    const candidates = this.allFiles.filter((entry) =>
+      !this.gridFiles.some((gridFile) => gridFile.path === entry.path));
+    while (this.gridFiles.length < GRID_SIZE && candidates.length > 0) {
+      const next = candidates.shift();
+      const file = { ...next, sessionTagIds: new Set(next.tag_ids ?? []) };
+      this.gridFiles.push(file);
+      const tagId = this.#currentTag?.id ?? null;
+      this.elements.grid.appendChild(this.#buildCell(file, tagId, this.gridFiles.length - 1));
+    }
+  }
+
   async #nextTag() {
     if (this.saving) {
       return;
     }
+    this.#setDeleteMode(false);
     this.#finalizeTagAttempt();
 
     const allDone = !this.#currentTag || this.currentTagIndex >= this.tagQueue.length - 1;
@@ -773,6 +841,7 @@ export class TaggingController {
   async #saveAndAdvance() {
     this.saving = true;
     this.elements.nextBtn.disabled = true;
+    this.elements.deleteModeBtn.disabled = true;
     this.#setStatus("Saving tags…");
 
     try {
@@ -821,7 +890,6 @@ export class TaggingController {
       this.tagStartedAt = Date.now();
       this.tagActions = 0;
       this.usedCommentaryPaths.clear();
-      this.#renderRound();
       this.#renderTag();
       this.#createCells(this.elements.grid, this.#currentTag?.id ?? null);
       this.#setStatus("");
@@ -831,6 +899,7 @@ export class TaggingController {
     } finally {
       this.saving = false;
       this.elements.nextBtn.disabled = false;
+      this.elements.deleteModeBtn.disabled = false;
     }
   }
 

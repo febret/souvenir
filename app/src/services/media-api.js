@@ -224,6 +224,12 @@ export class MediaApi {
     })));
   }
 
+  async deleteMedia(path) {
+    const url = new URL(`${this.baseUrl}/api/media`, window.location.origin);
+    url.searchParams.set("path", path ?? "");
+    return readJson(await fetch(url, noStore({ method: "DELETE" })));
+  }
+
   async mediaAdm(path) {
     const url = new URL(`${this.baseUrl}/api/media-adm`, window.location.origin);
     url.searchParams.set("path", path ?? "");
