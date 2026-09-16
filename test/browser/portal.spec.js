@@ -125,3 +125,70 @@ test("derives parent selection state and persists collapsed directory selections
   await expect(directoryCheckbox(page, "albums/trips")).toBeChecked();
   await expect(directoryCheckbox(page, "albums/favorites")).toBeChecked();
 });
+
+test("adds a commentary clip from the TTS dialog and lists the saved file", async ({
+  page,
+}) => {
+  await page.unroute("**/api/**");
+  const { commentaryServer, ttsServer } = await mockServer(page, {
+    commentaryServer: {
+      available: true,
+      entries: [{ path: "existing.wav", name: "Existing", media_type: "audio/wav" }],
+      assignments: new Map(),
+      captions: new Map(),
+      volumes: new Map(),
+      requests: [],
+    },
+    tagServer: { tags: [{ id: "tag-1", name: "Family" }], assignments: new Map(), requests: [], nextId: 2 },
+  });
+  await page.goto("/");
+
+  await expect(page.locator('#commentary-card .commentary-row[data-path="existing.wav"]')).toBeVisible();
+  const addButton = page.locator("#add-commentary");
+  await expect(addButton).toBeEnabled();
+
+  await addButton.click();
+  const popup = page.locator("#commentary-add-popup");
+  await expect(popup).toBeVisible();
+
+  await expect(page.locator("#commentary-add-voice option")).toHaveCount(2);
+  await expect(page.locator("#commentary-add-voice")).toHaveValue("en-US-Ava-neural");
+
+  const voiceFilter = page.locator("#commentary-add-voice-filter");
+  await voiceFilter.fill("ryan");
+  await expect(page.locator("#commentary-add-voice option")).toHaveCount(1);
+  await expect(page.locator("#commentary-add-voice")).toHaveValue("en-GB-Ryan-neural");
+  await voiceFilter.fill("");
+  await expect(page.locator("#commentary-add-voice option")).toHaveCount(2);
+  await page.locator("#commentary-add-voice").selectOption("en-US-Ava-neural");
+
+  await page.locator("#commentary-add-text").fill("Welcome to the gallery!");
+
+  const previewButton = page.locator("#commentary-add-preview");
+  await expect(previewButton).toBeEnabled();
+  await previewButton.click();
+
+  const saveButton = page.locator("#commentary-add-save");
+  await expect(saveButton).toBeEnabled({ timeout: 15000 });
+
+  await page.locator('#commentary-add-tags label', { hasText: "Family" }).click();
+  await expect(page.locator('#commentary-add-tags input[value="tag-1"]')).toBeChecked();
+  await saveButton.click();
+
+  await expect(popup).toBeHidden();
+  await expect(page.locator('.commentary-row[data-path="commentary.mp3"]')).toBeVisible();
+  await expect(page.locator('.commentary-row[data-path="existing.wav"]')).toBeVisible();
+
+  const ttsPosts = ttsServer.requests.filter((request) => request.method === "POST");
+  expect(ttsPosts).toHaveLength(1);
+  expect(ttsPosts[0].job).toEqual(expect.objectContaining({
+    text: "Welcome to the gallery!",
+    voice: "en-US-Ava-neural",
+  }));
+  const commentaryPosts = commentaryServer.requests.filter((request) => request.method === "POST");
+  expect(commentaryPosts).toHaveLength(1);
+  expect(commentaryPosts[0]).toEqual(expect.objectContaining({
+    path: "commentary.mp3",
+    tagIds: ["tag-1"],
+  }));
+});

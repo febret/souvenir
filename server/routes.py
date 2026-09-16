@@ -2,28 +2,39 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Iterator, Literal
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from PIL import Image, UnidentifiedImageError
 
 from .auto_depth import AutoDepthGenerator, AutoDepthService
 from .auto_mask import AutoMaskGenerator, AutoMaskService
-from .commentary import commentary_entries, commentary_type, resolve_commentary_file
+from .commentary import COMMENTARY_TYPES, commentary_entries, commentary_type, resolve_commentary_file
 from .depth_maps import MAX_DEPTH_MAP_BYTES, DepthMapStore
-from .media import cache_path, content_type, is_allowed, is_internal_path, is_media, media_type, metadata, parse_included_dirs, relative_text, resolve_under_root
+from .media import TTS_WORK_DIRNAME, cache_path, content_type, is_allowed, is_internal_path, is_media, media_type, media_url, metadata, parse_included_dirs, relative_text, resolve_under_root
 from .scenes import SceneStore
 from .masks import MAX_MASK_BYTES, MaskStore
 from .tags import DEFAULT_ADM_DEPTH_INTENSITY, TagStore
 from .thumbnails import create_thumbnail
 from .trash import move_media
+from .tts import (
+    CommentaryTtsService,
+    TtsGenerator,
+    normalize_tts_text,
+    normalize_tts_tuning,
+    require_request_id,
+    validate_tts_voice,
+)
 
 _RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
 MAX_UPLOAD_IMAGE_BYTES = 64 * 1024 * 1024
 MAX_UPLOAD_IMAGE_DIMENSION = 16384
+MAX_UPLOAD_COMMENTARY_BYTES = 64 * 1024 * 1024
 _SUPPORTED_UPLOAD_IMAGE_FORMATS: dict[str, tuple[str, str]] = {
     "JPEG": ("image/jpeg", ".jpg"),
     "PNG": ("image/png", ".png"),
@@ -119,13 +130,20 @@ def add_routes(
     upload_root: Path,
     auto_mask_generator: AutoMaskGenerator | None = None,
     auto_depth_generator: AutoDepthGenerator | None = None,
+    tts_generator: TtsGenerator | None = None,
 ) -> None:
     masks = MaskStore(root)
     auto_masks = AutoMaskService(root, masks, generator=auto_mask_generator)
     depth_maps = DepthMapStore(root)
     auto_depth = AutoDepthService(root, depth_maps, generator=auto_depth_generator)
+    tts = (
+        CommentaryTtsService(commentary_root / TTS_WORK_DIRNAME, generator=tts_generator)
+        if commentary_root is not None
+        else None
+    )
     app.state.auto_mask_service = auto_masks
     app.state.auto_depth_service = auto_depth
+    app.state.commentary_tts = tts
     tags = TagStore(root)
     scenes = SceneStore(root)
 
@@ -371,6 +389,101 @@ def add_routes(
     def commentary_file(path: str, request: Request) -> Response:
         source, _ = _commentary_relative(commentary_root, path)
         return _stream_media(source, request, response_media_type=commentary_type(source))
+
+    @app.post("/api/commentary", status_code=201)
+    async def save_commentary(
+        file: UploadFile = File(...),
+        tags_value: str = Form(default="[]", alias="tags"),
+    ) -> Response:
+        _check_commentary_root(commentary_root)
+        tag_ids = _parse_tag_ids(tags_value)
+        stem, suffix, payload = await _read_commentary_audio(file)
+        try:
+            commentary_root.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            raise HTTPException(500, "commentary directory is unavailable") from error
+        if not commentary_root.is_dir():
+            raise HTTPException(500, "commentary directory is unavailable")
+        try:
+            created = _write_unique_upload(
+                commentary_root,
+                stem=stem,
+                suffix=suffix,
+                payload=payload,
+            )
+        except OSError as error:
+            raise HTTPException(500, "commentary save failed while writing the file") from error
+        relative = created.relative_to(commentary_root)
+        try:
+            assignment = tags.replace_commentary_assignment(relative, tag_ids)
+        except Exception:
+            try:
+                created.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        stat = created.stat()
+        return _no_store(
+            {
+                "name": created.name,
+                "path": relative_text(relative),
+                "media_type": commentary_type(created),
+                "size": stat.st_size,
+                "mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                "url": media_url(relative, "/api/commentary/file"),
+                "tag_ids": list(assignment["tag_ids"]),
+                "caption": "",
+                "volume": 1.0,
+            },
+            status_code=201,
+        )
+
+    @app.get("/api/commentary/tts/voices")
+    def tts_voices() -> Response:
+        _require_tts(tts)
+        try:
+            return _no_store({"voices": tts.list_voices()})
+        except RuntimeError as error:
+            raise HTTPException(502, str(error)) from error
+
+    @app.post("/api/commentary/tts", status_code=201)
+    async def request_tts(request: Request) -> Response:
+        _require_tts(tts)
+        body = await _json_object(request)
+        _require_exact_keys(body, {"text", "voice", "pitch", "rate"})
+        text = normalize_tts_text(body["text"])
+        voice = validate_tts_voice(body["voice"])
+        pitch = normalize_tts_tuning(body["pitch"], name="pitch")
+        rate = normalize_tts_tuning(body["rate"], name="rate")
+        return _no_store(
+            tts.request(text, voice, rate_percent=rate, pitch_percent=pitch),
+            status_code=201,
+        )
+
+    @app.api_route("/api/commentary/tts/file", methods=["GET", "HEAD"])
+    def tts_file(request_id: str, request: Request) -> Response:
+        _require_tts(tts)
+        request_id = require_request_id(request_id)
+        found = tts.file(request_id)
+        if found is None:
+            raise HTTPException(404, "TTS audio is not ready")
+        source, tts_media_type = found
+        return _stream_media(source, request, response_media_type=tts_media_type)
+
+    @app.get("/api/commentary/tts/{request_id}")
+    def tts_status(request_id: str) -> Response:
+        _require_tts(tts)
+        request_id = require_request_id(request_id)
+        snapshot = tts.status(request_id)
+        if snapshot is None:
+            raise HTTPException(404, "TTS request was not found")
+        return _no_store(snapshot)
+
+    @app.delete("/api/commentary/tts/{request_id}")
+    def cancel_tts(request_id: str) -> Response:
+        _require_tts(tts)
+        request_id = require_request_id(request_id)
+        return _no_store(tts.cancel(request_id))
 
     @app.get("/api/commentary-tags")
     def get_commentary_tags(path: str) -> Response:
@@ -737,6 +850,70 @@ def _commentary_relative(root: Path | None, path: str) -> tuple[Path, Path]:
     if root is None:
         raise HTTPException(404, "commentary is unavailable")
     return resolve_commentary_file(root, path)
+
+
+def _commentary_unavailable() -> HTTPException:
+    return HTTPException(404, "commentary is unavailable")
+
+
+def _check_commentary_root(root: Path | None) -> None:
+    if root is None:
+        raise _commentary_unavailable()
+
+
+def _require_tts(tts: CommentaryTtsService | None) -> CommentaryTtsService:
+    if tts is None:
+        raise _commentary_unavailable()
+    return tts
+
+
+def _parse_tag_ids(raw: str) -> list[str]:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise HTTPException(422, "tags must be a JSON array of tag IDs") from error
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise HTTPException(422, "tags must be a JSON array of tag IDs")
+    return value
+
+
+async def _read_commentary_audio(file: UploadFile) -> tuple[str, str, bytes]:
+    content_type_header = (file.content_type or "").split(";", 1)[0].strip().lower()
+    if not content_type_header.startswith("audio/"):
+        raise HTTPException(415, "upload content type must be audio/*")
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(422, "uploaded commentary is empty")
+    if len(payload) > MAX_UPLOAD_COMMENTARY_BYTES:
+        raise HTTPException(413, "uploaded commentary is too large")
+    if not _looks_like_audio(payload):
+        raise HTTPException(422, "uploaded commentary is not a supported audio file")
+    stem, suffix = _commentary_stem_and_suffix_from_name(file.filename)
+    return stem, suffix, payload
+
+
+def _looks_like_audio(payload: bytes) -> bool:
+    head = payload[:16]
+    if head.startswith(b"RIFF") and payload[8:12] == b"WAVE":
+        return True
+    if head.startswith((b"ID3", b"OggS", b"fLaC", b"FORM")):
+        return True
+    if payload[4:8] == b"ftyp":
+        return True
+    if len(head) >= 2 and head[0] == 0xFF and (head[1] & 0xE0) == 0xE0:
+        # MP3 frame sync or ADTS header.
+        return True
+    return False
+
+
+def _commentary_stem_and_suffix_from_name(filename: str | None) -> tuple[str, str]:
+    name = "" if filename is None else Path(filename).name.strip()
+    suffix = (Path(name).suffix.lower() if name else "")
+    if suffix not in COMMENTARY_TYPES:
+        suffix = ".wav"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stem = f"commentary-{stamp}-{uuid.uuid4().hex[:6]}"
+    return stem, suffix
 
 
 async def _json_object(request: Request) -> dict:

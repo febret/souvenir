@@ -178,6 +178,12 @@ media routes.
 | `PUT /api/media-tags/bulk` | Atomically replace tag IDs for multiple validated media paths |
 | `GET /api/commentary` | Commentary availability and recursive audio metadata |
 | `GET, HEAD /api/commentary/file?path=` | Full or ranged browser-native audio |
+| `POST /api/commentary` | Validate audio magic + size, save uniquely, attach shared tag IDs |
+| `GET /api/commentary/tts/voices` | No-store Edge-TTS voice catalog (6h server cache, 10s fetch timeout) |
+| `POST /api/commentary/tts` | Queue a `{text, voice, pitch, rate}` preview; returns queued snapshot |
+| `GET /api/commentary/tts/{id}` | Poll queued/running/completed/failed/cancelled snapshot |
+| `DELETE /api/commentary/tts/{id}` | Cancel a queued/running preview |
+| `GET, HEAD /api/commentary/tts/file?request_id=` | Full or ranged preview audio for completed jobs |
 | `GET, PUT /api/commentary-tags?path=` | Read or replace one sound's shared tag IDs |
 | `GET, PUT /api/commentary-caption?path=` | Read or replace one sound's caption sequence |
 | `GET, PUT /api/commentary-volume?path=` | Read or replace one sound's normalized 0–1 volume |
@@ -239,6 +245,16 @@ skips hidden/symlink entries, returns only relative metadata plus server-owned
 tags, captions, and volume, and uses the same range-streaming response path as
 media.
 Supported types are WAV, MP3, OGG/Opus, M4A/AAC, and WebM.
+
+`POST /api/commentary` accepts `audio/*` uploads up to 64 MiB, sniffs audio
+magic bytes (WAV/MP3/OGG/FLAC/M4A/ADTS), saves under a server-generated
+`commentary-{timestamp}-{rand}` name, and attaches shared tag IDs atomically;
+tag-assignment failure deletes the file. `server/tts.py:CommentaryTtsService`
+queues Edge-TTS previews (max 24 pending, last 32 terminal snapshots) into
+`<commentary>/.souvenir-tts/`, which is excluded from media listing/scan/file
+access via `INTERNAL_DIRECTORIES` and hidden from commentary listing by the
+dot-prefix rule. Preview polling is generation-guarded on the client; cancel
+marks queued/running jobs cancelled and removes their files.
 
 ### Static client
 

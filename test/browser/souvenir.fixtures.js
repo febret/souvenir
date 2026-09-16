@@ -269,6 +269,16 @@ async function mockServer(
     mediaEntries = entries,
     tree = directoryTree,
     videoFixtures = {},
+    ttsServer = {
+      voices: [
+        { id: "en-US-Ava-neural", name: "Microsoft Ava", gender: "Female", locale: "en-US" },
+        { id: "en-GB-Ryan-neural", name: "Microsoft Ryan", gender: "Male", locale: "en-GB" },
+      ],
+      jobs: new Map(),
+      autoComplete: true,
+      requests: [],
+      nextId: 1,
+    },
   } = {},
 ) {
   let statusIndex = 0;
@@ -277,6 +287,9 @@ async function mockServer(
   sceneServer.nextId ??= 1;
   commentaryServer.captions ??= new Map();
   commentaryServer.volumes ??= new Map();
+  ttsServer.jobs ??= new Map();
+  ttsServer.requests ??= [];
+  ttsServer.nextId ??= 1;
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/library-status") {
@@ -379,6 +392,27 @@ async function mockServer(
         commentaryServer.failuresRemaining -= 1;
         return route.fulfill({ status: 503, json: { detail: "Commentary temporarily unavailable." } });
       }
+      if (route.request().method() === "POST") {
+        const body = route.request().postData() ?? "";
+        const nameMatch = body.match(/filename="([^"]+)"/);
+        const tagsMatch = body.match(/name="tags"\r\n\r\n([^\r]+)/);
+        const tagIds = tagsMatch ? JSON.parse(tagsMatch[1]) : [];
+        const stem = "commentary-generated";
+        const entry = {
+          name: nameMatch?.[1] ?? `${stem}.wav`,
+          path: nameMatch?.[1] ?? `${stem}.wav`,
+          media_type: nameMatch?.[1]?.endsWith(".wav") ? "audio/wav" : "audio/mpeg",
+          size: route.request().postData()?.length ?? 0,
+          mtime: "2026-09-16T00:00:00Z",
+          url: `/api/commentary/file?path=${encodeURIComponent(nameMatch?.[1] ?? `${stem}.wav`)}`,
+          tag_ids: tagIds,
+          caption: "",
+          volume: 1,
+        };
+        commentaryServer.entries.unshift(entry);
+        commentaryServer.requests.push({ method: "POST", path: entry.path, tagIds });
+        return route.fulfill({ status: 201, json: entry });
+      }
       const entries = commentaryServer.entries.map((entry) => ({
         ...entry,
         tag_ids: [...(commentaryServer.assignments.get(entry.path) ?? entry.tag_ids ?? [])],
@@ -395,6 +429,56 @@ async function mockServer(
     }
     if (url.pathname === "/api/commentary/file") {
       return route.fulfill({ status: 200, contentType: "audio/wav", body: WAV_FIXTURE });
+    }
+    if (url.pathname === "/api/commentary/tts/voices") {
+      ttsServer.requests.push({ method: "GET", path: url.pathname });
+      return route.fulfill({ json: { voices: ttsServer.voices } });
+    }
+    if (url.pathname === "/api/commentary/tts/file") {
+      ttsServer.requests.push({ method: route.request().method(), path: url.pathname });
+      return route.fulfill({
+        status: 200,
+        contentType: "audio/wav",
+        body: WAV_FIXTURE,
+      });
+    }
+    if (url.pathname === "/api/commentary/tts") {
+      if (route.request().method() !== "POST") {
+        return route.fulfill({ status: 405, json: { detail: "Method not allowed." } });
+      }
+      const body = route.request().postDataJSON() ?? {};
+      const job = {
+        id: `tts-${ttsServer.nextId++}`,
+        status: "queued",
+        text: body.text ?? "",
+        voice: body.voice ?? "",
+        pitch: body.pitch ?? 0,
+        rate: body.rate ?? 0,
+        polls: 0,
+        created_at: "2026-09-16T00:00:00Z",
+      };
+      ttsServer.jobs.set(job.id, job);
+      ttsServer.requests.push({ method: "POST", path: url.pathname, job });
+      return route.fulfill({ status: 201, json: job });
+    }
+    if (url.pathname.startsWith("/api/commentary/tts/")) {
+      const method = route.request().method();
+      const id = decodeURIComponent(url.pathname.slice("/api/commentary/tts/".length));
+      const job = ttsServer.jobs.get(id);
+      if (!job) return route.fulfill({ status: 404, json: { detail: "TTS request not found." } });
+      if (method === "DELETE") {
+        job.status = "cancelled";
+        ttsServer.requests.push({ method, path: url.pathname, id });
+        return route.fulfill({ json: { id, status: "cancelled" } });
+      }
+      if (method === "GET") {
+        job.polls += 1;
+        if (ttsServer.autoComplete && (job.status === "queued" || job.status === "running")) {
+          job.status = job.polls === 1 ? "running" : "completed";
+        }
+        ttsServer.requests.push({ method, path: url.pathname, id });
+        return route.fulfill({ json: { id, status: job.status } });
+      }
     }
     if (url.pathname === "/api/commentary-tags") {
       const path = url.searchParams.get("path") ?? "";
@@ -870,7 +954,7 @@ async function mockServer(
     }
     return route.fulfill({ status: 404, json: { detail: "Not found" } });
   });
-  return { maskServer, depthServer, tagServer, admServer };
+  return { maskServer, depthServer, tagServer, admServer, commentaryServer, ttsServer };
 }
 
 function directoryRow(page, path) {

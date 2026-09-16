@@ -89,3 +89,35 @@ describe("MediaApi errors", () => {
     expect(options).toEqual(expect.objectContaining({ method: "DELETE", cache: "no-store" }));
   });
 });
+
+describe("MediaApi commentary TTS helpers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("posts a TTS request and uploads trimmed audio with tags", async () => {
+    const ttsFetch = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ id: "ab".repeat(16), status: "queued" }),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", ttsFetch);
+
+    await new MediaApi().requestTts("Hello.", "en-US-Ava", 5, -15);
+
+    const [url, options] = ttsFetch.mock.calls[0];
+    expect(url).toBe("/api/commentary/tts");
+    expect(JSON.parse(options.body)).toEqual({ text: "Hello.", voice: "en-US-Ava", pitch: 5, rate: -15 });
+
+    const created = { name: "commentary-clip.wav", tag_ids: [7] };
+    const saveFetch = vi.fn(async () => new Response(
+      JSON.stringify(created),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", saveFetch);
+    const file = new File([new Uint8Array([1, 2, 3])], "commentary.mp3", { type: "audio/mpeg" });
+
+    await expect(new MediaApi().saveCommentaryAudio(file, [7])).resolves.toEqual(created);
+    const [, saveOptions] = saveFetch.mock.calls[0];
+    expect(saveOptions.body.get("tags")).toBe("[7]");
+  });
+});

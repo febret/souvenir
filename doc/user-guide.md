@@ -166,6 +166,16 @@ The home screen includes these panels:
    Each compact sound row also has a **Volume** slider. Its saved 0–100% level is
    applied both to portal test playback and automatic AR commentary, which lets
    you reduce louder recordings to match quieter source recordings.
+   Choose **Add commentary** to type a line (up to 2000 characters), pick a
+   voice, adjust pitch (±Hz) and rate (±%), then **Generate preview**. Use the
+   **Filter voices** box above the voice list to narrow it by name, locale, or
+   gender when the catalog is large. Press
+   **Replay** to listen — previews never autoplay, since browsers require a
+   gesture. Trim start/end with the sliders (or keep full length), check shared
+   tags, and **Save to folder** to store the clip in `SOUVENIR_COMMENTARY_DIR`
+   with its tag assignment. Trimming decodes audio in-browser; very long
+   previews may take a moment on Quest. Verify new voices on Quest Browser
+   before a show, as headset audio decoding can differ from desktop.
 6. Use **Caption size**, **Transparency**, and **Distance** in the Commentary
    card to control the AR caption card on this device. These display preferences
    are saved in the browser with the other portal settings. Transparency ranges

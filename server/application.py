@@ -13,6 +13,7 @@ from .auto_mask import AutoMaskGenerator
 from .config import commentary_dir, library_id, load_settings, upload_dirname
 from .library import LibraryScanService, LibraryScanner
 from .routes import add_routes
+from .tts import TtsGenerator
 
 
 def _suppress_windows_connection_reset_noise() -> tuple[asyncio.AbstractEventLoop, object | None]:
@@ -47,6 +48,7 @@ def create_app(
     upload_dirname_override: str | None = None,
     auto_mask_generator: AutoMaskGenerator | None = None,
     auto_depth_generator: AutoDepthGenerator | None = None,
+    tts_generator: TtsGenerator | None = None,
 ) -> FastAPI:
     settings = load_settings() if media_home is None else None
     root = Path(media_home).expanduser().resolve() if media_home is not None else settings.media_home
@@ -73,9 +75,13 @@ def create_app(
         app.state.library_scan.start()
         app.state.auto_mask_service.start()
         app.state.auto_depth_service.start()
+        if app.state.commentary_tts is not None:
+            app.state.commentary_tts.start()
         try:
             yield
         finally:
+            if app.state.commentary_tts is not None:
+                app.state.commentary_tts.stop()
             app.state.auto_depth_service.stop()
             app.state.auto_mask_service.stop()
             loop.set_exception_handler(previous_handler)
@@ -94,6 +100,7 @@ def create_app(
         upload_root=upload_root,
         auto_mask_generator=auto_mask_generator,
         auto_depth_generator=auto_depth_generator,
+        tts_generator=tts_generator,
     )
     _add_static_application(app)
     return app

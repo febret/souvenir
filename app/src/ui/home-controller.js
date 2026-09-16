@@ -15,6 +15,7 @@ import {
   normalizeTagFrequency,
   suggestCommentaryTags,
 } from "../core/commentary.js";
+import { CommentaryAddDialog } from "./commentary-add-dialog.js";
 import { SpatialApp } from "../scene/spatial-app.js";
 import { MediaApi, flattenDirectoryTree } from "../services/media-api.js";
 import {
@@ -212,6 +213,29 @@ export class HomeController {
       commentaryCard: document.querySelector("#commentary-card"),
       commentaryState: document.querySelector("#commentary-state"),
       commentaryError: document.querySelector("#commentary-error"),
+      addCommentary: document.querySelector("#add-commentary"),
+      commentaryAddRowHint: document.querySelector("#commentary-add-row-hint"),
+      commentaryAddPopup: document.querySelector("#commentary-add-popup"),
+      commentaryAddClose: document.querySelector("#commentary-add-close"),
+      commentaryAddForm: document.querySelector("#commentary-add-form"),
+      commentaryAddText: document.querySelector("#commentary-add-text"),
+      commentaryAddVoice: document.querySelector("#commentary-add-voice"),
+      commentaryAddVoiceFilter: document.querySelector("#commentary-add-voice-filter"),
+      commentaryAddPitch: document.querySelector("#commentary-add-pitch"),
+      commentaryAddPitchValue: document.querySelector("#commentary-add-pitch-value"),
+      commentaryAddRate: document.querySelector("#commentary-add-rate"),
+      commentaryAddRateValue: document.querySelector("#commentary-add-rate-value"),
+      commentaryAddHint: document.querySelector("#commentary-add-hint"),
+      commentaryAddPreview: document.querySelector("#commentary-add-preview"),
+      commentaryAddCancelTts: document.querySelector("#commentary-add-cancel-tts"),
+      commentaryAddStatus: document.querySelector("#commentary-add-status"),
+      commentaryAddReplay: document.querySelector("#commentary-add-replay"),
+      commentaryAddStart: document.querySelector("#commentary-add-start"),
+      commentaryAddEnd: document.querySelector("#commentary-add-end"),
+      commentaryAddCropLabel: document.querySelector("#commentary-add-crop-label"),
+      commentaryAddTags: document.querySelector("#commentary-add-tags"),
+      commentaryAddSave: document.querySelector("#commentary-add-save"),
+      commentaryAddSaveStatus: document.querySelector("#commentary-add-save-status"),
       suggestCommentaryTags: document.querySelector("#suggest-commentary-tags"),
       commentarySuggestHint: document.querySelector("#commentary-suggest-hint"),
       commentarySuggestPopup: document.querySelector("#commentary-suggest-popup"),
@@ -253,6 +277,19 @@ export class HomeController {
       sceneDurationValue: document.querySelector("#scene-duration-value"),
       sceneCaptureDelete: document.querySelector("#scene-capture-delete"),
     };
+    this.commentaryAddDialog = new CommentaryAddDialog({
+      document,
+      api: this.api,
+      elements: this.elements,
+      getTags: () => this.tags,
+      getAvailability: () => ({
+        loading: this.commentaryLoading,
+        error: this.commentaryError,
+        available: this.commentaryAvailable,
+      }),
+      onSaved: () => this.#loadCommentary(),
+      onError: (error) => this.#showError(error),
+    });
   }
 
   async start() {
@@ -327,6 +364,7 @@ export class HomeController {
         this.#renderCommentary();
       }
     });
+    this.commentaryAddDialog.bind();
     this.elements.captionSize.addEventListener("input", () => {
       this.settings.captionSize = Number(this.elements.captionSize.value);
       this.#renderCaptionSettings();
@@ -405,6 +443,12 @@ export class HomeController {
         this.#renderCommentary();
         return;
       }
+      if (this.commentaryAddDialog?.isOpen) {
+        event.preventDefault();
+        this.commentaryAddDialog.close();
+        this.#renderCommentary();
+        return;
+      }
       if (!this.elements.sceneShell.hidden) {
         event.preventDefault();
         this.closeScene();
@@ -415,7 +459,10 @@ export class HomeController {
         this.#restoreMaximizedPanel();
       }
     });
-    window.addEventListener("pagehide", () => this.#disposeCommentaryAudio(), { once: true });
+    window.addEventListener("pagehide", () => {
+      this.commentaryAddDialog?.dispose();
+      this.#disposeCommentaryAudio();
+    }, { once: true });
   }
 
   #renderSettings() {
@@ -1486,6 +1533,7 @@ export class HomeController {
     retryCommentary.disabled = this.commentaryLoading;
     commentaryList.replaceChildren();
     this.#renderCommentarySuggest();
+    this.commentaryAddDialog?.render();
     this.#renderCommentaryFilter();
 
     if (this.commentaryLoading) {

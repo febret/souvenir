@@ -185,6 +185,56 @@ export class MediaApi {
     })));
   }
 
+  async ttsVoices() {
+    return readJson(await fetch(`${this.baseUrl}/api/commentary/tts/voices`, noStore()));
+  }
+
+  async requestTts(text, voice, pitch, rate) {
+    return readJson(await fetch(`${this.baseUrl}/api/commentary/tts`, noStore({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice, pitch, rate }),
+    })));
+  }
+
+  ttsFileUrl(requestId) {
+    const url = new URL(`${this.baseUrl}/api/commentary/tts/file`, window.location.origin);
+    url.searchParams.set("request_id", requestId);
+    return url.toString();
+  }
+
+  async downloadTtsPreview(url) {
+    const response = await fetch(url, noStore());
+    if (!response.ok) {
+      throw new MediaApiError("The generated preview could not be downloaded.", response.status);
+    }
+    return response.blob();
+  }
+
+  async ttsStatus(requestId) {
+    return readJson(await fetch(
+      `${this.baseUrl}/api/commentary/tts/${encodeURIComponent(requestId)}`,
+      noStore(),
+    ));
+  }
+
+  async cancelTts(requestId) {
+    return readJson(await fetch(
+      `${this.baseUrl}/api/commentary/tts/${encodeURIComponent(requestId)}`,
+      noStore({ method: "DELETE" }),
+    ));
+  }
+
+  async saveCommentaryAudio(file, tagIds = []) {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("tags", JSON.stringify(tagIds));
+    return readJson(await fetch(`${this.baseUrl}/api/commentary`, noStore({
+      method: "POST",
+      body: form,
+    })));
+  }
+
   async createTag(name) {
     return readJson(await fetch(`${this.baseUrl}/api/tags`, noStore({
       method: "POST",

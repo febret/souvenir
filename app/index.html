@@ -330,6 +330,14 @@
             Loading commentary…
           </p>
           <p id="commentary-error" class="commentary-error" role="alert" hidden></p>
+          <div class="commentary-add-row">
+            <button id="add-commentary" class="secondary-button" type="button" disabled>
+              Add commentary
+            </button>
+            <p id="commentary-add-row-hint" class="commentary-add-hint" role="status" aria-live="polite">
+              Loading commentary…
+            </p>
+          </div>
           <div class="commentary-suggest-row">
             <button id="suggest-commentary-tags" class="secondary-button" type="button" disabled>
               Suggest commentary tags
@@ -385,9 +393,127 @@
               <div id="commentary-suggest-distribution" class="commentary-suggest-distribution"></div>
             </div>
           </div>
+
         </section>
 
       </form>
+
+          <div
+            id="commentary-add-popup"
+            class="commentary-add-popup"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="commentary-add-title"
+            hidden
+          >
+            <div class="commentary-add-panel">
+              <header class="commentary-add-header">
+                <h4 id="commentary-add-title">Add commentary</h4>
+                <button
+                  id="commentary-add-close"
+                  class="icon-button"
+                  type="button"
+                  aria-label="Close commentary popup"
+                >×</button>
+              </header>
+              <form id="commentary-add-form">
+                <label class="commentary-add-field">
+                  <span><strong>Text</strong><small>Up to 2000 characters.</small></span>
+                  <textarea
+                    id="commentary-add-text"
+                    maxlength="2000"
+                    rows="3"
+                    placeholder="Type what you want to say…"
+                    aria-label="Commentary text"
+                  ></textarea>
+                </label>
+                <div class="commentary-add-controls-row">
+                  <label class="commentary-add-field">
+                    <span><strong>Voice</strong></span>
+                    <input
+                      id="commentary-add-voice-filter"
+                      type="search"
+                      placeholder="Filter voices…"
+                      autocomplete="off"
+                      aria-label="Filter TTS voices"
+                    />
+                    <select id="commentary-add-voice" aria-label="TTS voice"></select>
+                  </label>
+                  <label class="commentary-add-field">
+                    <span><strong>Pitch</strong></span>
+                    <div class="commentary-add-range">
+                      <input
+                        id="commentary-add-pitch"
+                        type="range"
+                        min="-50"
+                        max="50"
+                        step="1"
+                        value="0"
+                        aria-label="Pitch adjustment"
+                      />
+                      <output id="commentary-add-pitch-value" for="commentary-add-pitch">+0 Hz</output>
+                    </div>
+                  </label>
+                  <label class="commentary-add-field">
+                    <span><strong>Rate</strong></span>
+                    <div class="commentary-add-range">
+                      <input
+                        id="commentary-add-rate"
+                        type="range"
+                        min="-50"
+                        max="50"
+                        step="1"
+                        value="0"
+                        aria-label="Speaking rate adjustment"
+                      />
+                      <output id="commentary-add-rate-value" for="commentary-add-rate">+0%</output>
+                    </div>
+                  </label>
+                </div>
+                <p id="commentary-add-hint" class="commentary-add-hint" role="status" aria-live="polite"></p>
+                <div class="commentary-add-actions">
+                  <button id="commentary-add-preview" type="button" class="secondary-button" disabled>
+                    Generate preview
+                  </button>
+                  <button id="commentary-add-cancel-tts" type="button" class="secondary-button" hidden>
+                    Cancel
+                  </button>
+                  <span id="commentary-add-status" class="commentary-add-status" role="status"></span>
+                </div>
+                <hr class="commentary-add-divider" />
+                <div class="commentary-add-crop">
+                  <p class="commentary-add-crop-heading">
+                    <span class="commentary-add-crop-heading-title">
+                      <strong>Save a clip</strong>
+                      <small>Play the preview once, then trim the start and end below.</small>
+                    </span>
+                    <button id="commentary-add-replay" class="commentary-add-replay" type="button" hidden>Replay preview</button>
+                  </p>
+                  <div class="commentary-add-crop-row">
+                    <label class="commentary-add-field">
+                      <span><strong>Start</strong></span>
+                      <input id="commentary-add-start" type="range" min="0" max="0" step="0.1" value="0" aria-label="Clip start time" />
+                    </label>
+                    <label class="commentary-add-field">
+                      <span><strong>End</strong></span>
+                      <input id="commentary-add-end" type="range" min="0" max="0" step="0.1" value="0" aria-label="Clip end time" />
+                    </label>
+                    <output id="commentary-add-crop-label" class="commentary-add-crop-label" for="commentary-add-start">Full length</output>
+                  </div>
+                  <label class="commentary-add-field">
+                    <span><strong>Tags</strong><small>Share definitions with media tags.</small></span>
+                    <div id="commentary-add-tags" class="commentary-add-tag-options"></div>
+                  </label>
+                  <div class="commentary-add-actions">
+                    <button id="commentary-add-save" type="button" class="primary-button" disabled>
+                      Save to folder
+                    </button>
+                    <span id="commentary-add-save-status" class="commentary-add-status" role="status"></span>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
 
       <p id="app-error" class="app-error" role="alert" hidden></p>
       <footer>
