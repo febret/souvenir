@@ -301,9 +301,14 @@ class CommentaryTtsService:
             if not output.is_file() or output.stat().st_size == 0:
                 raise RuntimeError("TTS produced no audio")
             with self._condition:
+                # Double-check that job still exists and is running
                 current = self._jobs.get(request_id)
                 if current is None or current.status != "running":
-                    self._remove_file(current or state)
+                    # Job was cancelled or changed status, clean up file if needed
+                    try:
+                        output.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                     return
                 now = _timestamp()
                 current.status = "completed"
@@ -319,6 +324,7 @@ class CommentaryTtsService:
             except OSError:
                 pass
             with self._condition:
+                # Double-check that job still exists and is running before updating
                 current = self._jobs.get(request_id)
                 if current is None or current.status != "running":
                     return
