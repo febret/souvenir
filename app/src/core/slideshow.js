@@ -3,6 +3,14 @@ import { nextMedia } from "./playlist.js";
 
 const DEFAULT_INTERVAL_MS = 5000;
 
+export function randomMedia(playlist, random = Math.random) {
+  const entries = Array.isArray(playlist) ? playlist : [];
+  if (!entries.length) return null;
+  const value = Number(random());
+  const bounded = Number.isFinite(value) ? Math.min(0.999999999, Math.max(0, value)) : 0;
+  return entries[Math.floor(bounded * entries.length)] ?? null;
+}
+
 export function createSlideshowState({ active = false, intervalMs = DEFAULT_INTERVAL_MS, currentMediaId = null, lastAdvanceAt = 0 } = {}) {
   return {
     active: Boolean(active),

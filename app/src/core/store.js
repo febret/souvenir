@@ -27,6 +27,10 @@ export class PanelStore {
   setSort(id, sort) { return this.#store.setSort(id, sort); }
   setView(id, view) { return this.#store.setView(id, view); }
   setTagFilter(id, tagIds) { return this.#store.setTagFilter(id, tagIds); }
+  setSlideshowMode(id, mode) { return this.#store.setSlideshowMode(id, mode); }
+  setSlideshowTagIds(id, tagIds) {
+    return this.#store.setSlideshowTagIds(id, tagIds);
+  }
   reconcileTagFilters(tagIds) { return this.#store.reconcileTagFilters(tagIds); }
   setLocked(id, locked) { return this.#store.setLocked(id, locked); }
   minimize(id) { return this.#store.minimize(id); }

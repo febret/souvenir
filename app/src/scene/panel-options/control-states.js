@@ -12,6 +12,13 @@ function isLightingControl(action) {
     || LIGHTING_ACTION_PREFIXES.some((prefix) => action.startsWith(prefix));
 }
 
+export function computePanelControlState(action, state) {
+  return {
+    active: computeActive(action, state),
+    inactive: computeInactive(action, state),
+  };
+}
+
 function computeActive(action, state) {
   const {
     maskEnabled,
@@ -25,6 +32,7 @@ function computeActive(action, state) {
     lightColor,
     ambientColor,
     ambientIntensity,
+    slideshowMode,
   } = state;
   if (action === "toggle-mask") return Boolean(maskEnabled && maskAvailable);
   if (action === "toggle-3d-mode") return Boolean(admEnabled);
@@ -32,6 +40,7 @@ function computeActive(action, state) {
   if (action === "toggle-fade-depth") return Boolean(fadeDepthEnabled);
   if (action === "toggle-focus-blur") return Boolean(focusBlurEnabled);
   if (action === "toggle-light-fx") return Boolean(lightFxEnabled);
+  if (action.startsWith("set-slideshow-mode:")) return action.slice("set-slideshow-mode:".length) === slideshowMode;
   const [, value] = action.split(":");
   if (action.startsWith("set-light-direction:")) return value === lightDirection;
   if (action.startsWith("set-light-color:")) return value === lightColor;
@@ -72,6 +81,7 @@ export function applyControlStates(content, {
   lightColor,
   ambientColor,
   ambientIntensity,
+  slideshowMode,
   depthAvailable,
 }) {
   const state = {
@@ -89,14 +99,14 @@ export function applyControlStates(content, {
     lightColor,
     ambientColor,
     ambientIntensity,
+    slideshowMode,
     depthAvailable,
     lightingActive: admEnabled && mediaType === "image" && mediaLoaded && !admPromptVisible,
   };
   for (const control of content.children) {
     const action = control.userData?.action;
     if (!action) continue;
-    const inactive = computeInactive(action, state);
-    const active = computeActive(action, state);
+    const { active, inactive } = computePanelControlState(action, state);
     const isSwatch = Boolean(control.userData?.colorSwatch);
     control.material.color.set(inactive ? 0x5f6b67 : (active && !isSwatch) ? 0xaaf1c3 : 0xffffff);
   }

@@ -3,6 +3,8 @@ import { normalizeTagIds } from "./tags.js";
 
 export const SAVE_MODES = Object.freeze(["disabled", "scale", "full"]);
 export const DEFAULT_SAVE_MODE = "scale";
+export const SLIDESHOW_MODES = Object.freeze(["normal", "tag"]);
+export const DEFAULT_SLIDESHOW_MODE = "normal";
 
 /**
  * Fixed outline palette. Panels are identified by number and color; color is
@@ -45,6 +47,10 @@ export function normalizeSaveMode(mode) {
   return SAVE_MODES.includes(mode) ? mode : DEFAULT_SAVE_MODE;
 }
 
+export function normalizeSlideshowMode(mode) {
+  return SLIDESHOW_MODES.includes(mode) ? mode : DEFAULT_SLIDESHOW_MODE;
+}
+
 /**
  * Builds a normalized per-media saved pose entry.
  *
@@ -79,6 +85,8 @@ export function createPanel({ id, ...overrides } = {}) {
     admEnabled: Boolean(overrides.admEnabled),
     depthIntensity: depthIntensity(overrides.depthIntensity),
     saveMode,
+    slideshowMode: normalizeSlideshowMode(overrides.slideshowMode),
+    slideshowTagIds: normalizeTagIds(overrides.slideshowTagIds),
     tagFilter: normalizeTagIds(overrides.tagFilter),
     media: {
       directory: typeof overrides.media?.directory === "string" ? overrides.media.directory : null,
@@ -465,13 +473,37 @@ export function createPanelStore({ panels = [], focusedId = null, media, idFacto
       emit({ type: "panel", panelIds: [id] });
       return copy(panel);
     },
+    setSlideshowMode(id, mode) {
+      const nextMode = normalizeSlideshowMode(mode);
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      if (current.slideshowMode === nextMode) return copy(current);
+      const panel = updatePanel(id, (item) => { item.slideshowMode = nextMode; });
+      emit({ type: "panel", panelIds: [id] });
+      return copy(panel);
+    },
+    setSlideshowTagIds(id, tagIds) {
+      const nextIds = normalizeTagIds(tagIds);
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      if (current.slideshowTagIds.length === nextIds.length
+        && current.slideshowTagIds.every((tagId, index) => tagId === nextIds[index])) {
+        return copy(current);
+      }
+      const panel = updatePanel(id, (item) => { item.slideshowTagIds = nextIds; });
+      emit({ type: "panel", panelIds: [id] });
+      return copy(panel);
+    },
     reconcileTagFilters(tagIds) {
       const available = new Set(normalizeTagIds(tagIds));
       let changed = false;
       for (const panel of state.panels) {
-        const nextIds = panel.tagFilter.filter((tagId) => available.has(tagId));
-        if (nextIds.length !== panel.tagFilter.length) {
-          panel.tagFilter = nextIds;
+        const nextFilter = panel.tagFilter.filter((tagId) => available.has(tagId));
+        const nextSlideshowTags = panel.slideshowTagIds.filter((tagId) => available.has(tagId));
+        if (nextFilter.length !== panel.tagFilter.length
+          || nextSlideshowTags.length !== panel.slideshowTagIds.length) {
+          panel.tagFilter = nextFilter;
+          panel.slideshowTagIds = nextSlideshowTags;
           changed = true;
         }
       }

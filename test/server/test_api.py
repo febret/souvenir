@@ -359,6 +359,138 @@ def test_upload_images_reject_invalid_image_payload(client: TestClient):
     assert response.json()["detail"] == "unsupported uploaded image format"
 
 
+def test_upload_images_do_not_queue_generation_without_flags(library: Path):
+    mask_generator = FakeAutoMaskGenerator()
+    depth_generator = FakeAutoDepthGenerator()
+    with TestClient(
+        create_app(
+            library,
+            auto_mask_generator=mask_generator,
+            auto_depth_generator=depth_generator,
+        )
+    ) as client:
+        response = client.post(
+            "/api/uploads",
+            files=[("files", ("plain.jpg", _jpeg_bytes(), "image/jpeg"))],
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["auto"] == {"depth": [], "mask": []}
+        assert client.get("/api/mask/auto", params={"path": "uploads/plain.jpg"}).json()["status"] == "idle"
+        assert client.get("/api/depth/auto", params={"path": "uploads/plain.jpg"}).json()["status"] == "idle"
+        assert mask_generator.calls == 0
+        assert depth_generator.calls == 0
+
+
+def test_upload_images_queues_auto_depth_when_enabled(library: Path):
+    mask_generator = FakeAutoMaskGenerator()
+    depth_generator = FakeAutoDepthGenerator(payload=_png_bytes(mode="L"))
+    with TestClient(
+        create_app(
+            library,
+            auto_mask_generator=mask_generator,
+            auto_depth_generator=depth_generator,
+        )
+    ) as client:
+        response = client.post(
+            "/api/uploads",
+            files=[
+                ("files", ("photo.jpg", _jpeg_bytes((255, 0, 0)), "image/jpeg")),
+                ("files", ("photo.png", _png_bytes((0, 0, 255, 255)), "image/png")),
+            ],
+            params={"auto_depth": "1"},
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert len(body["auto"]["depth"]) == 2
+        assert body["auto"]["mask"] == []
+        for job in body["auto"]["depth"]:
+            assert job["status"] in {"queued", "running"}
+
+        status = None
+        for _ in range(40):
+            status = client.get("/api/depth/auto", params={"path": "uploads/photo.jpg"}).json()
+            if status["status"] == "completed":
+                break
+            time.sleep(0.05)
+        assert status is not None
+        assert status["status"] == "completed"
+        assert client.get("/api/depth-info", params={"path": "uploads/photo.jpg"}).json()["exists"] is True
+        assert depth_generator.calls == 2
+        assert mask_generator.calls == 0
+
+
+def test_upload_images_queues_auto_mask_when_enabled(library: Path):
+    mask_generator = FakeAutoMaskGenerator(payload=_png_bytes((255, 255, 255, 255), size=(12, 8)))
+    depth_generator = FakeAutoDepthGenerator()
+    with TestClient(
+        create_app(
+            library,
+            auto_mask_generator=mask_generator,
+            auto_depth_generator=depth_generator,
+        )
+    ) as client:
+        response = client.post(
+            "/api/uploads",
+            files=[("files", ("photo.jpg", _jpeg_bytes((255, 0, 0)), "image/jpeg"))],
+            params={"auto_mask": "1"},
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert len(body["auto"]["mask"]) == 1
+        assert body["auto"]["depth"] == []
+
+        status = None
+        for _ in range(40):
+            status = client.get("/api/mask/auto", params={"path": "uploads/photo.jpg"}).json()
+            if status["status"] == "completed":
+                break
+            time.sleep(0.05)
+        assert status is not None
+        assert status["status"] == "completed"
+        assert client.get("/api/mask-info", params={"path": "uploads/photo.jpg"}).json()["exists"] is True
+        assert mask_generator.calls == 1
+        assert depth_generator.calls == 0
+
+
+def test_upload_images_queues_both_and_passes_max_resolution(library: Path):
+    mask_generator = FakeAutoMaskGenerator(payload=_png_bytes((255, 255, 255, 255), size=(12, 8)))
+    depth_generator = FakeAutoDepthGenerator(payload=_png_bytes(mode="L"))
+    with TestClient(
+        create_app(
+            library,
+            auto_mask_generator=mask_generator,
+            auto_depth_generator=depth_generator,
+        )
+    ) as client:
+        response = client.post(
+            "/api/uploads",
+            files=[("files", ("photo.jpg", _jpeg_bytes((255, 0, 0)), "image/jpeg"))],
+            params={"auto_depth": "1", "auto_mask": "1", "max_resolution": "1024"},
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert len(body["auto"]["depth"]) == 1
+        assert len(body["auto"]["mask"]) == 1
+        assert body["auto"]["depth"][0]["max_dimension"] == 1024
+
+        status = None
+        for _ in range(40):
+            status = client.get("/api/adm/auto", params={"path": "uploads/photo.jpg"}).json()
+            if status["status"] == "completed":
+                break
+            time.sleep(0.05)
+        assert status is not None
+        assert status["status"] == "completed"
+        assert depth_generator.max_dimensions == [1024]
+        assert mask_generator.max_dimensions == [1024]
+        assert depth_generator.sources == [library / "uploads" / "photo.jpg"]
+
+
 def test_mask_save_get_and_restart_persistence(library: Path):
     source = Image.new("RGBA", (12, 8), (255, 255, 255, 0))
     source.paste((255, 255, 255, 255), (0, 0, 6, 8))

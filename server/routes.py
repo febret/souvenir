@@ -181,7 +181,12 @@ def add_routes(
         return {"path": relative_text(relative), "entries": entries, "directories": [entry for entry in entries if entry["kind"] == "directory"], "files": [entry for entry in entries if entry["kind"] == "file"]}
 
     @app.post("/api/uploads", status_code=201)
-    async def upload_images(files: list[UploadFile] = File(default=[])) -> Response:
+    async def upload_images(
+        files: list[UploadFile] = File(default=[]),
+        generate_depth: bool = Query(default=False, alias="auto_depth"),
+        generate_mask: bool = Query(default=False, alias="auto_mask"),
+        max_resolution: int = Query(default=512, ge=64, le=2048),
+    ) -> Response:
         if not files:
             raise HTTPException(422, "at least one image file is required")
         if is_internal_path(upload_root.relative_to(root)):
@@ -204,10 +209,20 @@ def add_routes(
                 except OSError:
                     pass
             raise HTTPException(500, "upload failed while saving files") from error
+        queued_depth: list[dict[str, object]] = []
+        queued_mask: list[dict[str, object]] = []
+        if generate_depth or generate_mask:
+            for created_path in created:
+                relative = created_path.relative_to(root)
+                if generate_depth:
+                    queued_depth.append(auto_depth.request(relative, max_dimension=max_resolution))
+                if generate_mask:
+                    queued_mask.append(auto_masks.request(relative, max_dimension=max_resolution))
         return _no_store(
             {
                 "directory": relative_text(upload_root.relative_to(root)),
                 "entries": [metadata(root, path) for path in created],
+                "auto": {"depth": queued_depth, "mask": queued_mask},
             },
             status_code=201,
         )

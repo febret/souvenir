@@ -6,6 +6,7 @@
  */
 export function computeSignature({
   saveMode,
+  slideshowMode,
   tagDefinitions,
   mediaTagIds,
   tagListExpanded,
@@ -14,6 +15,7 @@ export function computeSignature({
   const settings = admSettings ?? {};
   return JSON.stringify({
     saveMode,
+    slideshowMode,
     tagListExpanded: Boolean(tagListExpanded),
     tags: (Array.isArray(tagDefinitions) ? tagDefinitions : []).map((t) => [t.id, t.name]),
     selected: Array.isArray(mediaTagIds) ? mediaTagIds : [],

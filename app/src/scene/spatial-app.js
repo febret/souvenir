@@ -192,7 +192,10 @@ export class SpatialApp {
 
     this.interactions.setRayVisible(!this.zenMode);
     if (!immersive) {
-      this.panelCoordinator.setOverlayScene(this.desktopOverlayScene);
+      this.panelCoordinator.setOverlayScene(
+        this.desktopOverlayScene,
+        this.canvas.parentElement,
+      );
     }
     this.renderer.setAnimationLoop((time) => this.#render(time));
   }

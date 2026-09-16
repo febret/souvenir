@@ -58,10 +58,14 @@ export function saveLayout(
   const libraryId = validateLibraryId(currentLibraryId);
   const serializedRuntime = {};
   for (const [panelId, value] of runtime) {
-    serializedRuntime[panelId] = {
+    const serialized = {
       playlist: value.playlist ?? [],
       slideshow: value.slideshow ?? null,
     };
+    if (Array.isArray(value.tagPlaylist) && value.tagPlaylist.length) {
+      serialized.tagPlaylist = value.tagPlaylist;
+    }
+    serializedRuntime[panelId] = serialized;
   }
   storage.setItem(
     LAYOUT_STORAGE_KEY,

@@ -69,7 +69,7 @@ export class MediaApi {
     return readJson(await fetch(url));
   }
 
-  async uploadImages(files) {
+  async uploadImages(files, options = {}) {
     const uploads = Array.from(files ?? []);
     if (!uploads.length) {
       throw new MediaApiError("Select at least one image to upload.");
@@ -78,7 +78,18 @@ export class MediaApi {
     uploads.forEach((file) => {
       form.append("files", file);
     });
-    return readJson(await fetch(`${this.baseUrl}/api/uploads`, noStore({
+    const query = new URLSearchParams();
+    if (options.autoDepth) {
+      query.set("auto_depth", "1");
+    }
+    if (options.autoMask) {
+      query.set("auto_mask", "1");
+    }
+    if (query.has("auto_depth") || query.has("auto_mask")) {
+      query.set("max_resolution", String(options.maxResolution ?? 512));
+    }
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return readJson(await fetch(`${this.baseUrl}/api/uploads${suffix}`, noStore({
       method: "POST",
       body: form,
     })));

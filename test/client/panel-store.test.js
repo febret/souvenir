@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SAVE_MODE,
+  DEFAULT_SLIDESHOW_MODE,
   SAVE_MODES,
+  SLIDESHOW_MODES,
   normalizeSaveMode,
+  normalizeSlideshowMode,
   restorePanel,
 } from "../../app/src/core/panel-store.js";
 import { normalizeTagIds } from "../../app/src/core/tags.js";
@@ -30,6 +33,23 @@ describe("panel model and store", () => {
     expect(SAVE_MODES).toEqual(["disabled", "scale", "full"]);
     expect(normalizeSaveMode("broken")).toBe(DEFAULT_SAVE_MODE);
     expect(normalizeSaveMode("full")).toBe("full");
+  });
+
+  it("persists a normalized slideshow mode and retained tag selections", () => {
+    const store = new PanelStore({ idFactory: () => "one" });
+    expect(store.add()).toMatchObject({
+      slideshowMode: DEFAULT_SLIDESHOW_MODE,
+      slideshowTagIds: [],
+    });
+    expect(SLIDESHOW_MODES).toEqual(["normal", "tag"]);
+    expect(normalizeSlideshowMode("bad")).toBe(DEFAULT_SLIDESHOW_MODE);
+    store.setSlideshowMode("one", "tag");
+    store.setSlideshowTagIds("one", [" horse ", "blue", "horse"]);
+    const restored = new PanelStore(JSON.parse(JSON.stringify(store.getState())));
+    expect(restored.getState().panels[0]).toMatchObject({
+      slideshowMode: "tag",
+      slideshowTagIds: ["horse", "blue"],
+    });
   });
 
   it("defensively clears unavailable media during restoration", () => {
@@ -217,7 +237,7 @@ describe("panel model and store", () => {
   it("reconciles persisted tag filters after definitions are deleted", () => {
     const store = new PanelStore({
       panels: [
-        { id: "one", tagFilter: ["horse", "blue"] },
+        { id: "one", tagFilter: ["horse", "blue"], slideshowTagIds: ["horse", "blue"] },
         { id: "two", tagFilter: ["portrait"] },
       ],
     });
@@ -229,5 +249,6 @@ describe("panel model and store", () => {
       ]);
     expect(store.reconcileTagFilters(["horse", "portrait"]).panels[0].tagFilter)
       .toEqual(["horse"]);
+    expect(store.getState().panels[0].slideshowTagIds).toEqual(["horse"]);
   });
 });

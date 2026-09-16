@@ -5,6 +5,10 @@ export const SAVE_MODE_DEFINITIONS = [
   ["Scale", "scale"],
   ["Full", "full"],
 ];
+export const SLIDESHOW_MODE_DEFINITIONS = [
+  ["Normal", "normal"],
+  ["Tag", "tag"],
+];
 export const PANEL_WIDTH = 0.84;
 export const PADDING = 0.015;
 export const TITLE_HEIGHT = 0.06;

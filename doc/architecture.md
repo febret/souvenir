@@ -165,7 +165,7 @@ media routes.
 | `GET /api/tree` | Recursive directory metadata |
 | `GET /api/media?path=` | One directory's child directories and media entries |
 | `DELETE /api/media?path=` | Move a validated media file to the internal `.trashcan` and purge its derived state |
-| `POST /api/uploads` | Validate and store one or more uploaded images under `<media_home>/<upload_dirname>` |
+| `POST /api/uploads` | Validate and store one or more uploaded images under `<media_home>/<upload_dirname>`. Optional `auto_depth`/`auto_mask` flags queue queued images for ADM depth and background mask generation via the existing services. |
 | `GET, HEAD /api/file?path=` | Full or single-range media streaming |
 | `GET /api/thumbnail?path=` | Cached JPEG image thumbnail or video placeholder |
 | `GET /api/mask-info?path=` | No-store mask presence, blur, timestamp, and URL |
@@ -188,6 +188,17 @@ Video seeking depends on byte-range responses. Valid ranges return `206` with
 `upload_dirname` defaults to `uploads` and is configurable with
 `SOUVENIR_UPLOAD_DIRNAME`. Uploads remain inside `SOUVENIR_MEDIA_HOME` and then
 flow through normal media listing/file/thumbnail APIs.
+
+When the portal's **Generate depth on upload** / **Generate background mask on
+upload** settings are enabled, the client appends `auto_depth=1`, `auto_mask=1`,
+and `max_resolution=<admMaxResolution>` to `POST /api/uploads`. After the files
+are written, the upload endpoint enqueues each created media path into
+`AutoDepthService` and/or `AutoMaskService` and returns their job snapshots in a
+new `auto: {depth: [...], mask: [...]}` response field (empty arrays when no
+flag is set). The in-process queue workers generate the artifacts into
+`.souvenir-depth/` and `.souvenir-masks/` exactly like in-app ADM and Auto Mask
+requests; queued/running jobs for the same path are deduplicated by the
+services.
 
 ### Thumbnails and masks
 
@@ -247,7 +258,8 @@ fallback. Static paths are independently constrained to the static root.
 - loads health and validates `library_id`;
 - loads the collapsible directory tree;
 - persists selected folders, autoplay, slideshow interval, and caption display
-  size/transparency/distance;
+  size/transparency/distance, plus ADM defaults and upload-time auto
+  depth/background mask toggles;
 - manages shared tag definitions plus compact commentary filtering, test
   playback, tags, captions, and per-sound volume;
 - detects immersive AR support;
@@ -263,9 +275,10 @@ CRUD, media/commentary tag assignments, commentary captions/volume, commentary
 listing, and commentary file URLs. API errors become explicit `MediaApiError`
 instances.
 
-Portal settings use schema version 2 under the `souvenir.settings` local-storage
-key. Older values receive caption-display defaults during reconciliation, and
-directory selections are reconciled against the current server tree.
+Portal settings use schema version 5 under the `souvenir.settings` local-storage
+key. Older values receive caption-display and upload-generation defaults during
+reconciliation, and directory selections are reconciled against the current
+server tree.
 The portal Commentary card owns a separate, explicit-activation HTML audio
 element for testing sounds and editing their shared tags, captions, and volume.
 Its transient filter state supports AND matching over shared tag IDs plus a
@@ -394,7 +407,7 @@ state:
 - transform and dimensions;
 - minimized restoration dimensions;
 - media directory, selected ID, sort, and view;
-- persistent panel-local tag filter;
+- persistent panel-local tag filter plus slideshow mode/tag selections;
 - lock and content-zoom state;
 - content pan/zoom;
 - slideshow/display/aspect settings;
@@ -408,6 +421,17 @@ controls. Stable panel options live in
 controls only when their definitions, selection, save mode, or panel layout
 changes. CPU depth-plane construction lives separately in
 `app/src/scene/depth-surface.js`.
+
+In desktop preview the per-panel options panel is presented as a 2D DOM window
+`app/src/scene/panel-options-window.js:PanelOptionsWindow` instead of in-world
+chrome. `SpatialApp` passes the scene shell as the window host, and
+`PanelView.setOverlayScene` creates/disposes one window per view. Only the
+focused panel's window is visible; `PanelView` gates both the 3D options group
+and the DOM window through the same visibility predicate, so the desktop mode
+keeps the 3D OPTIONS chrome out of the world. Window actions reuse the
+`PanelCoordinator.handleAction` and mask-workflow setting paths. A draggable
+title bar moves the window, and its position is remembered while the preview
+stays open but is not persisted to the layout.
 
 `app/src/scene/media-browser-view.js:MediaBrowserView` owns bounded directory
 navigation, pagination, view modes, sorting, thumbnail cards, and selection
@@ -444,7 +468,11 @@ Content pan/zoom layers on these base mappings. Panel frame ratios independently
 cycle through Native, 1:1, 4:3, 3:2, 16:9, and 9:16.
 
 Slideshows keep per-panel runtime state. Images advance on the configured timer;
-videos autoplay in slideshow mode and advance only on `ended`.
+videos autoplay in slideshow mode and advance only on `ended`. Normal mode
+advances through the panel playlist. Tag mode exposes randomly sampled tags
+from the current item and randomly selects the next AND-matching item from all
+Portal-enabled directories; without selected slideshow tags it falls back to
+the normal panel-directory playlist.
 
 ### Erase-mask editing and application
 
@@ -540,7 +568,7 @@ reliably darken passthrough.
 
 | Data | Location | Scope |
 |---|---|---|
-| Folder choices, autoplay, slideshow interval, caption size/transparency/distance | `souvenir.settings` in localStorage | Browser/device |
+| Folder choices, autoplay, slideshow interval, caption size/transparency/distance, upload-generation depth/mask toggles | `souvenir.settings` in localStorage | Browser/device |
 | Stable random-sort seed | `souvenir.media-random-seed` in localStorage | Browser/device |
 | Panels, transforms, media state, environment mode, runtime playlists | `souvenir.layout.v1` in localStorage | Browser/device + `library_id` |
 | Thumbnail JPEGs | `<media root>/.souvenir-thumbnails` | Server/library |

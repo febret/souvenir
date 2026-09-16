@@ -21,6 +21,7 @@ import {
 } from "../core/erase-mask.js";
 import { SpatialSlider } from "./spatial-slider.js";
 import { PanelOptionsView } from "./panel-options-view.js";
+import { PanelOptionsWindow } from "./panel-options-window.js";
 import { createDisplacedPlaneGeometry } from "./depth-surface.js";
 import { ADM_SLIDER_ROW_STEP } from "./panel-options/constants.js";
 
@@ -439,6 +440,10 @@ export class PanelView extends THREE.Group {
     this.controls.name = "controls";
     this.uiRoot.add(this.controls);
     this.#createControls();
+    this.slideshowTags = new THREE.Group();
+    this.slideshowTags.name = "slideshow-tags";
+    this.uiRoot.add(this.slideshowTags);
+    this.slideshowTagsSignature = "";
     this.optionsPanel = new PanelOptionsView(this.panel.id, {
       onDrag: (gesture) => this.#handleOptionsDrag(gesture),
     });
@@ -453,13 +458,15 @@ export class PanelView extends THREE.Group {
     this.uiBillboards = [
       this.numberBadge,
       this.controls,
+      this.slideshowTags,
       this.optionsPanel,
       this.editorControls,
       this.admPrompt,
     ];
     this.overlayScene = null;
+    this.optionsWindow = null;
     this.overlayAnchors = new Map();
-    this.overlayGroups = [this.controls, this.optionsPanel, this.editorControls, this.admPrompt];
+    this.overlayGroups = [this.controls, this.slideshowTags, this.editorControls, this.admPrompt];
     this.applyState(panel);
   }
 
@@ -469,7 +476,7 @@ export class PanelView extends THREE.Group {
    * Anchor Object3Ds remain in uiRoot to track each group's intended world
    * transform; tick() copies those transforms to the overlay scene each frame.
    */
-  setOverlayScene(scene) {
+  setOverlayScene(scene, domHost = null) {
     if (this.overlayScene === scene) return;
     this.clearOverlayScene();
     this.overlayScene = scene;
@@ -485,6 +492,16 @@ export class PanelView extends THREE.Group {
     }
     // Remove overlayed groups from billboard list; they are handled separately.
     this.uiBillboards = this.uiBillboards.filter((b) => !this.overlayGroups.includes(b));
+    if (domHost && !this.optionsWindow) {
+      this.optionsWindow = new PanelOptionsWindow({
+        panelId: this.panel.id,
+        host: domHost,
+        onAction: (action) => this.callbacks.onAction?.(this.panel.id, action),
+        onAdmSetting: (setting, value) => this.callbacks.onAdmSetting?.(this.panel.id, setting, value),
+      });
+      this.#syncOptionsWindow();
+      this.#syncOptionsWindowVisibility();
+    }
   }
 
   /** Returns overlay groups back to uiRoot and removes anchors. */
@@ -500,6 +517,8 @@ export class PanelView extends THREE.Group {
       this.uiRoot.add(group);
     }
     this.overlayScene = null;
+    this.optionsWindow?.dispose();
+    this.optionsWindow = null;
     this.uiBillboards = [
       this.numberBadge,
       this.controls,
@@ -532,26 +551,101 @@ export class PanelView extends THREE.Group {
   }
 
   #refreshOptionsPanel(width = this.panel?.dimensions?.width ?? 1.2, height = this.panel?.dimensions?.height ?? 0.8) {
+    const admSettings = this.#currentAdmSettings();
+    if (this.overlayScene) {
+      this.#syncOptionsWindow(admSettings);
+      return;
+    }
     const rebuilt = this.optionsPanel.update({
       saveMode: this.saveMode,
+      slideshowMode: this.panel.slideshowMode,
       tagDefinitions: this.tagDefinitions,
       mediaTagIds: this.mediaTagIds,
       tagListExpanded: this.tagListExpanded,
       depthOffset: PANEL_OPTIONS_BASE_Z + this.#uiDepthOffset(),
-      admSettings: {        softDepthEnabled: this.softDepthEnabled,
-        fadeDepthEnabled: this.fadeDepthEnabled,
-        focusBlurEnabled: this.focusBlurEnabled,
-        focusPosition: this.focusPosition,
-        focusStrength: this.focusStrength,
-        lightFxEnabled: this.lightFxEnabled,
-        lightDirection: this.lightDirection,
-        lightColor: this.lightColor,
-        ambientColor: this.ambientColor,
-        ambientIntensity: this.ambientIntensity,
-      },
+      admSettings,
     });
     this.#layoutOptionsPanel(width, height);
     if (rebuilt) this.#updateControlStates();
+  }
+
+  #currentAdmSettings() {
+    return {
+      softDepthEnabled: this.softDepthEnabled,
+      fadeDepthEnabled: this.fadeDepthEnabled,
+      focusBlurEnabled: this.focusBlurEnabled,
+      focusPosition: this.focusPosition,
+      focusStrength: this.focusStrength,
+      lightFxEnabled: this.lightFxEnabled,
+      lightDirection: this.lightDirection,
+      lightColor: this.lightColor,
+      ambientColor: this.ambientColor,
+      ambientIntensity: this.ambientIntensity,
+      slideshowMode: this.panel.slideshowMode,
+    };
+  }
+
+  #syncOptionsWindow(admSettings = null) {
+    if (!this.optionsWindow) return;
+    this.optionsWindow.sync({
+      saveMode: this.saveMode,
+      slideshowMode: this.panel.slideshowMode,
+      tagDefinitions: this.tagDefinitions,
+      mediaTagIds: this.mediaTagIds,
+      tagListExpanded: this.tagListExpanded,
+      depthIntensity: this.depthIntensity,
+      admSettings: admSettings ?? this.#currentAdmSettings(),
+    });
+  }
+
+  #optionsChromeVisible() {
+    return Boolean(
+      this.uiVisible
+      && this.optionsOpen
+      && !this.panel?.minimized
+      && (this.panel?.focused ?? true)
+      && !this.zenMode,
+    );
+  }
+
+  /** Applies the 3D chrome visibility in XR and mirrors it to the DOM window in Desktop Preview. */
+  #applyOptionsVisibility() {
+    const desktop = Boolean(this.overlayScene);
+    const visible = desktop ? false : this.#optionsChromeVisible();
+    this.optionsPanel.visible = visible;
+    this.depthSlider.visible = visible;
+    this.#syncOptionsWindowVisibility();
+  }
+
+  #syncOptionsWindowVisibility() {
+    if (!this.optionsWindow) return;
+    const visible = Boolean(this.overlayScene) && this.#optionsChromeVisible();
+    if (visible) {
+      this.optionsWindow.setPositionIfUnset(this.#defaultOptionsWindowPosition());
+    }
+    this.optionsWindow.setVisible(visible);
+  }
+
+  #defaultOptionsWindowPosition() {
+    const host = this.optionsWindow?.host;
+    const hostRect = host instanceof Element ? host.getBoundingClientRect() : null;
+    const width = hostRect?.width || window.innerWidth;
+    const height = hostRect?.height || window.innerHeight;
+    if (this.activeViewCamera) {
+      this.updateMatrixWorld(true);
+      this.scratchUiWorldPosition.set(0, 0, 0).applyMatrix4(this.matrixWorld);
+      this.scratchUiWorldPosition.project(this.activeViewCamera);
+      const x = Math.round(((this.scratchUiWorldPosition.x + 1) / 2) * width) + 130;
+      const y = Math.round(((1 - this.scratchUiWorldPosition.y) / 2) * height) - 40;
+      return {
+        x: clampNumber(x, 8, Math.max(8, width - 340)),
+        y: clampNumber(y, 8, Math.max(8, height - 260)),
+      };
+    }
+    return {
+      x: Math.round(width * 0.6),
+      y: Math.round(height * 0.2),
+    };
   }
 
   #createEditorControls() {
@@ -825,12 +919,7 @@ export class PanelView extends THREE.Group {
     this.#updateControlStates();
     this.#applyDepthGeometry();
     this.#refreshOptionsPanel(width, height);
-    this.optionsPanel.visible = this.uiVisible
-      && this.optionsOpen
-      && !minimized
-      && Boolean(panel.focused ?? true)
-      && !this.zenMode;
-    this.depthSlider.visible = this.optionsPanel.visible;
+    this.#applyOptionsVisibility();
 
     this.#applyContentTransform(width, height);
     this.#applyUiDepthOffset();
@@ -900,9 +989,7 @@ export class PanelView extends THREE.Group {
   setFocused(focused) {
     this.controls.visible = this.uiVisible && focused && !this.panel.minimized && !this.editorActive && !this.zenMode;
     this.editorControls.visible = this.uiVisible && focused && !this.panel.minimized && this.editorActive;
-    this.depthSlider.visible = this.uiVisible && focused && !this.panel.minimized
-      && this.optionsOpen && !this.zenMode;
-    this.optionsPanel.visible = this.uiVisible && focused && this.optionsOpen && !this.panel.minimized && !this.zenMode;
+    this.#applyOptionsVisibility();
     const frameColor = new THREE.Color(this.panel.color ?? "#9be7b5").getHex();
     this.frame.material.color.set(frameColor);
     this.#updateFrameVisibility();
@@ -980,6 +1067,40 @@ export class PanelView extends THREE.Group {
   setMediaTagSelection(tagIds) {
     this.mediaTagIds = Array.isArray(tagIds) ? [...tagIds] : [];
     this.#refreshOptionsPanel();
+  }
+
+  setSlideshowTags({ definitions = [], selectedTagIds = [], visible = false } = {}) {
+    const signature = JSON.stringify([definitions, selectedTagIds, Boolean(visible)]);
+    if (signature === this.slideshowTagsSignature) return;
+    this.slideshowTagsSignature = signature;
+    disposeObject(this.slideshowTags);
+    this.slideshowTags.clear();
+    const width = this.panel.minimized ? 0.3 : this.panel.dimensions?.width ?? 0.95;
+    for (const [index, definition] of definitions.slice(0, 5).entries()) {
+      const selected = selectedTagIds.includes(definition.id);
+      const button = makeButton(`${selected ? "\u2713 " : ""}${definition.name}`, `toggle-slideshow-tag:${definition.id}`, {
+        width: 0.25,
+        height: 0.05,
+        textureWidth: 560,
+        textureHeight: 150,
+        font: "700 52px system-ui, sans-serif",
+        padding: 8,
+        background: selected ? "#294c38" : "#17211f",
+        border: selected ? "#8ce8af" : "#40534d",
+      });
+      button.position.set(-width / 2 - 0.15, 0.12 - index * 0.06, 0.02);
+      button.userData.panelId = this.panel.id;
+      button.userData.gestureTarget = false;
+      this.slideshowTags.add(button);
+    }
+    if (selectedTagIds.length) {
+      const clear = makeButton("Clear", "clear-slideshow-tags", { width: 0.18, height: 0.045 });
+      clear.position.set(-width / 2 - 0.15, -0.22, 0.02);
+      clear.userData.panelId = this.panel.id;
+      clear.userData.gestureTarget = false;
+      this.slideshowTags.add(clear);
+    }
+    this.slideshowTags.visible = Boolean(visible) && this.slideshowTags.children.length > 0;
   }
 
   toggleMediaTags(definitions, tagIds) {
@@ -1105,7 +1226,7 @@ export class PanelView extends THREE.Group {
             (action === "toggle-slideshow" && this.panel.slideshow?.playing);
           control.material.color.set((inactive || tagInactive) ? 0x5f6b67 : active ? 0xaaf1c3 : 0xffffff);
         }
-        this.optionsPanel.updateControlStates({
+        const optionsState = {
           maskAvailable: this.maskAvailable,
           mediaLoaded: this.mediaLoaded,
           mediaType: this.mediaType,
@@ -1120,13 +1241,25 @@ export class PanelView extends THREE.Group {
           lightColor: this.lightColor,
           ambientColor: this.ambientColor,
           ambientIntensity: this.ambientIntensity,
+          slideshowMode: this.panel.slideshowMode,
           depthAvailable: Boolean(this.depthMapCanvas),
-        });
+          lightingActive: this.admEnabled
+            && this.mediaType === "image"
+            && this.mediaLoaded
+            && !this.admPromptVisible,
+        };
+        this.optionsPanel.updateControlStates(optionsState);
         const sliderInteractive = this.admEnabled
           && this.mediaType === "image"
           && this.mediaLoaded
           && !this.admBusy
           && !this.admPromptVisible;
+        if (this.optionsWindow) {
+          this.optionsWindow.updateControlStates({
+            ...optionsState,
+            depthInteractive: sliderInteractive,
+          });
+        }
         for (const slider of [
           this.depthSlider,
           this.softDepthSlider,
@@ -1641,6 +1774,8 @@ export class PanelView extends THREE.Group {
 
   dispose() {
     this.clearOverlayScene();
+    this.optionsWindow?.dispose();
+    this.optionsWindow = null;
     this.#clearPendingImageTap();
     if (this.editorFrame != null) cancelAnimationFrame(this.editorFrame);
     this.#clearMaskTextures();

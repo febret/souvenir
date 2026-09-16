@@ -130,6 +130,20 @@ export function addSaveModeSection(content, widgets, { labelY, rowY, saveMode })
   }
 }
 
+export function addSlideshowModeSection(content, widgets, { labelY, rowY, slideshowMode }) {
+  content.add(widgets.sectionLabel("Slideshow mode", labelY));
+  for (const [index, [label, value]] of [["Normal", "normal"], ["Tag", "tag"]].entries()) {
+    const button = widgets.button(label, `set-slideshow-mode:${value}`, {
+      x: (index - 0.5) * 0.255,
+      y: rowY,
+      width: 0.23,
+      height: 0.05,
+    });
+    setButtonState(button, { active: slideshowMode === value });
+    content.add(button);
+  }
+}
+
 export function addDepthSection(content, widgets, {
   labelY,
   effectButtonY,

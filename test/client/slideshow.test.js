@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createSlideshowState, playbackPolicy, slideshowDelay, slideshowTransition } from "../../app/src/core/slideshow.js";
+import {
+  createSlideshowState,
+  playbackPolicy,
+  randomMedia,
+  slideshowDelay,
+  slideshowTransition,
+} from "../../app/src/core/slideshow.js";
 
 const image = { id: "image", name: "one.jpg" };
 const video = { id: "video", name: "two.mp4" };
@@ -24,5 +30,12 @@ describe("slideshow state machine", () => {
     expect(playbackPolicy(video, { autoplayVideos: true })).toMatchObject({ autoplay: true, loop: false });
     expect(playbackPolicy(video, { autoplayVideos: false })).toMatchObject({ autoplay: false });
     expect(playbackPolicy(video, { slideshowActive: true })).toMatchObject({ autoplay: true });
+  });
+
+  it("chooses a bounded random eligible item", () => {
+    expect(randomMedia([image, video], () => 0)).toBe(image);
+    expect(randomMedia([image, video], () => 0.99)).toBe(video);
+    expect(randomMedia([image], () => Number.NaN)).toBe(image);
+    expect(randomMedia([], () => 0.5)).toBeNull();
   });
 });

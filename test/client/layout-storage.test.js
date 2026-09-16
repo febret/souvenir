@@ -37,7 +37,11 @@ describe("layout storage library reconciliation", () => {
     };
     const runtime = new Map([[
       "panel-1",
-      { playlist: [{ path: "photos/sun.jpg" }], slideshow: { active: true } },
+      {
+        playlist: [{ path: "photos/sun.jpg" }],
+        tagPlaylist: [{ path: "albums/tagged.jpg" }],
+        slideshow: { active: true },
+      },
     ]]);
 
     saveLayout(storage, state, runtime, "library-a", "underwater");
@@ -47,6 +51,7 @@ describe("layout storage library reconciliation", () => {
       runtime: {
         "panel-1": {
           playlist: [{ path: "photos/sun.jpg" }],
+          tagPlaylist: [{ path: "albums/tagged.jpg" }],
           slideshow: { active: true },
         },
       },

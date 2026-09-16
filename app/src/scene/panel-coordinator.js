@@ -5,6 +5,7 @@ import {
   applyPanelGesture,
   createPersistentRandomSeed,
   createSlideshowState,
+  isImage,
   interactionMode,
   matchesTagFilter,
   mediaId,
@@ -15,6 +16,7 @@ import {
   panelColor,
   playbackPolicy,
   previousMedia,
+  randomMedia,
   slideshowTransition,
   sortMedia,
 } from "../core/index.js";
@@ -27,6 +29,7 @@ const DEFAULT_PANEL_POSITION = { x: 0, y: 1.35, z: -1.45 };
 function layoutRuntime(value = {}) {
   return {
     playlist: Array.isArray(value.playlist) ? value.playlist.map(normalizeMediaEntry) : [],
+    tagPlaylist: Array.isArray(value.tagPlaylist) ? value.tagPlaylist.map(normalizeMediaEntry) : null,
     slideshow: createSlideshowState(value.slideshow ?? {}),
   };
 }
@@ -73,6 +76,7 @@ export class PanelCoordinator {
     this.runtime = new Map();
     this.tagDefinitions = [];
     this.playlistGenerations = new Map();
+    this.tagSlideshowGenerations = new Map();
     this.loadedMedia = new Map();
     this.mediaGenerations = new Map();
     this.mediaTagLookup = new Map();
@@ -163,6 +167,7 @@ export class PanelCoordinator {
           this.mediaGenerations.delete(panelId);
           this.maskWorkflow.panelRemoved(panelId);
           this.playlistGenerations.delete(panelId);
+          this.tagSlideshowGenerations.delete(panelId);
           this.panelTagFilterSignatures.delete(panelId);
           this.pendingTagSaves.delete(panelId);
         }
@@ -194,7 +199,7 @@ export class PanelCoordinator {
         });
         this.panelViews.set(panel.id, view);
         this.scene.add(view);
-        if (this.overlayScene) view.setOverlayScene(this.overlayScene);
+        if (this.overlayScene) view.setOverlayScene(this.overlayScene, this.overlayDomHost);
       }
       view.applyState({
         ...panel,
@@ -204,9 +209,22 @@ export class PanelCoordinator {
         slideshow: { playing: runtime.slideshow.active },
       });
       view.setTagDefinitions(this.tagDefinitions);
-      const selected = runtime.playlist.find((item) => mediaId(item) === panel.media.selectedId);
+      const selected = [...runtime.playlist, ...(runtime.tagPlaylist ?? [])].find(
+        (item) => mediaId(item) === panel.media.selectedId,
+      );
       if (selected) this.rememberMediaTags(selected);
       view.setMediaTagSelection(selected?.tag_ids ?? []);
+      view.setSlideshowTags({
+        definitions: this.slideshowTagDefinitions(selected, panel.slideshowTagIds),
+        selectedTagIds: panel.slideshowTagIds,
+        visible: runtime.slideshow.active && panel.slideshowMode === "tag",
+      });
+      if (runtime.slideshow.active && panel.slideshowMode === "tag"
+        && panel.slideshowTagIds.length && !Array.isArray(runtime.tagPlaylist)) {
+        this.refreshTagSlideshowPlaylist(panel).catch((error) => {
+          this.onError?.(new Error(`Could not restore tag slideshow media: ${error.message}`));
+        });
+      }
       if (tagFilterChanged && this.browser?.panelId === panel.id) {
         this.browser.setTagFilter(panel.tagFilter);
       }
@@ -355,6 +373,19 @@ export class PanelCoordinator {
         .finally(() => this.pendingTagSaves.delete(panelId));
     } else if (action.startsWith("set-save-mode:")) {
       this.store.setSaveMode(panelId, action.slice("set-save-mode:".length));
+    } else if (action.startsWith("set-slideshow-mode:")) {
+      this.store.setSlideshowMode(panelId, action.slice("set-slideshow-mode:".length));
+    } else if (action.startsWith("toggle-slideshow-tag:")) {
+      const tagId = action.slice("toggle-slideshow-tag:".length);
+      const selected = panel.slideshowTagIds.includes(tagId)
+        ? panel.slideshowTagIds.filter((id) => id !== tagId)
+        : [...panel.slideshowTagIds, tagId];
+      this.store.setSlideshowTagIds(panelId, selected);
+      this.refreshTagSlideshowPlaylist(this.getPanel(panelId)).catch((error) => {
+        this.onError?.(new Error(`Could not refresh tag slideshow media: ${error.message}`));
+      });
+    } else if (action === "clear-slideshow-tags") {
+      this.store.setSlideshowTagIds(panelId, []);
     } else if (action === "toggle-lock") {
       this.store.setLocked(panelId, !panel.locked);
     } else if (action === "toggle-minimize") {
@@ -484,8 +515,15 @@ export class PanelCoordinator {
       { type, now: performance.now() },
     ).state;
     if (runtime.slideshow.active && panel.media.selectedId) {
-      const current = runtime.playlist.find((item) => mediaId(item) === panel.media.selectedId);
+      const current = [...runtime.playlist, ...(runtime.tagPlaylist ?? [])].find(
+        (item) => mediaId(item) === panel.media.selectedId,
+      );
       if (current) this.showMedia(panel.id, current);
+      if (panel.slideshowMode === "tag" && panel.slideshowTagIds.length) {
+        this.refreshTagSlideshowPlaylist(panel).catch((error) => {
+          this.onError?.(new Error(`Could not load tag slideshow media: ${error.message}`));
+        });
+      }
     }
     this.reconcile(this.panelState, { type: "panel", panelIds: [panel.id] });
   }
@@ -497,16 +535,76 @@ export class PanelCoordinator {
 
   advanceSlideshow(panel, event) {
     const runtime = this.runtimeFor(panel.id);
-    const current = runtime.playlist.find((item) => mediaId(item) === panel.media.selectedId);
+    const current = [...runtime.playlist, ...(runtime.tagPlaylist ?? [])].find(
+      (item) => mediaId(item) === panel.media.selectedId,
+    );
+    if (panel.slideshowMode === "tag" && panel.slideshowTagIds.length
+      && !Array.isArray(runtime.tagPlaylist)) return;
     const transition = slideshowTransition(runtime.slideshow, event, {
       playlist: runtime.playlist,
       currentMedia: current,
     });
     runtime.slideshow = transition.state;
+    if (transition.action?.media && panel.slideshowMode === "tag" && panel.slideshowTagIds.length) {
+      const matching = runtime.tagPlaylist?.filter((item) =>
+        isImage(item) && matchesTagFilter(item, panel.slideshowTagIds)) ?? [];
+      const next = randomMedia(matching);
+      runtime.slideshow.currentMediaId = mediaId(next ?? current);
+      if (next) this.store.setMedia(panel.id, mediaId(next));
+      return;
+    }
     if (transition.action?.media) {
       this.store.setMedia(panel.id, mediaId(transition.action.media));
     }
   }
+
+  slideshowTagDefinitions(media, selectedTagIds = []) {
+      const assigned = new Set(normalizeTagIds(media?.tag_ids));
+      const enabled = new Set(normalizeTagIds(selectedTagIds));
+      const matching = this.tagDefinitions.filter((definition) => assigned.has(definition.id));
+      const selected = matching.filter((definition) => enabled.has(definition.id));
+      const remaining = matching.filter((definition) => !enabled.has(definition.id));
+      for (let index = remaining.length - 1; index > 0; index -= 1) {
+        const swap = Math.floor(Math.random() * (index + 1));
+        [remaining[index], remaining[swap]] = [remaining[swap], remaining[index]];
+      }
+      return [...selected, ...remaining].slice(0, 5);
+    }
+
+  async refreshTagSlideshowPlaylist(panel) {
+      if (!panel || panel.slideshowMode !== "tag" || !panel.slideshowTagIds.length) return;
+      const generation = (this.tagSlideshowGenerations.get(panel.id) ?? 0) + 1;
+      this.tagSlideshowGenerations.set(panel.id, generation);
+      this.runtimeFor(panel.id).tagPlaylist = null;
+      const tree = await this.api.tree();
+      const directories = [""];
+      const visit = (node) => {
+        for (const child of node?.children ?? []) {
+          if (child?.kind === "directory") {
+            directories.push(child.path);
+            visit(child);
+          }
+        }
+      };
+      visit(tree);
+      const selectedDirectories = this.getSettings().mediaDirectories;
+      const eligibleDirectories = directories.filter((directory) => selectedDirectories.length === 0
+        || selectedDirectories.some((selected) => directory === selected || directory.startsWith(`${selected}/`)));
+      const payloads = await Promise.all(eligibleDirectories.map((directory) =>
+        this.api.directory(directory, selectedDirectories)));
+      const current = this.getPanel(panel.id);
+      if (this.tagSlideshowGenerations.get(panel.id) !== generation
+        || current?.slideshowMode !== "tag"
+        || current.slideshowTagIds.join("\u0000") !== panel.slideshowTagIds.join("\u0000")) return;
+      const entries = new Map();
+      for (const payload of payloads) {
+        for (const entry of payload.entries ?? payload.items ?? payload ?? []) {
+          if (entry.kind !== "directory") entries.set(mediaId(entry), normalizeMediaEntry(entry));
+        }
+      }
+      this.runtimeFor(panel.id).tagPlaylist = this.sort([...entries.values()], current.media.sort);
+      this.rememberMediaTags([...entries.values()]);
+    }
 
   tick(time, camera = this.camera) {
     for (const panel of this.panelState.panels) {
@@ -577,10 +675,11 @@ export class PanelCoordinator {
     for (const view of this.panelViews.values()) view.setZenMode(enabled);
   }
 
-  setOverlayScene(overlayScene) {
+  setOverlayScene(overlayScene, domHost = null) {
     this.overlayScene = overlayScene;
+    this.overlayDomHost = domHost ?? null;
     for (const view of this.panelViews.values()) {
-      view.setOverlayScene(overlayScene);
+      view.setOverlayScene(overlayScene, domHost);
     }
   }
 

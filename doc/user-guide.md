@@ -180,6 +180,16 @@ The title bar offers three ways to open Souvenir:
 
 - **Upload images** imports one or more local image files into
   `<SOUVENIR_MEDIA_HOME>/<SOUVENIR_UPLOAD_DIRNAME>` (`uploads` by default).
+  With **Generate depth on upload** and/or **Generate background mask on
+  upload** checked in the Playback settings, every uploaded image is queued
+  in the background for auto depth map and/or auto background mask generation
+  and the portal reports the number queued.
+
+  Both toggles persist per browser; generation runs from the server's
+  background workers and feeds the same `.souvenir-depth` and `.souvenir-masks`
+  stores used by in-app ADM and Auto Mask, so the results are ready whenever
+  that media is opened afterward. The **Background generation resolution**
+  setting governs the inference size for these upload-time jobs too.
 - **Browse mode** opens a conventional desktop media browser.
 - **Desktop preview** runs the spatial gallery scene with mouse input.
 - **Enter passthrough** requests immersive AR and the browser's passthrough and
@@ -461,12 +471,22 @@ A slideshow uses the last playlist and sort order selected for that panel:
   `ended` event.
 - **Play** stops the slideshow without clearing the current item.
 
+In the panel **Options** window, choose **Slideshow mode**:
+
+- **Normal** retains the playlist's ordered behavior above.
+- **Tag** shows up to five randomly chosen tags from the displayed item along
+  the panel's left edge while playing. Select one or more tags to have the
+  following item chosen randomly from media in every Portal-enabled folder
+  carrying all selected tags. Use **Clear** to remove retained selections.
+  With no selected tags, Tag mode advances through the panel's current
+  directory exactly like Normal mode.
+
 Normal video selection follows the home-screen **Autoplay videos** preference.
 
 ## 8. Saved layouts
 
 Souvenir saves panel transforms and dimensions; selected media and directory;
-sort, view, tag filter, display mode, aspect ratio, and mask toggle; lock,
+sort, view, tag filter, slideshow mode and selected slideshow tags, display mode, aspect ratio, and mask toggle; lock,
 minimize, content pan/zoom, slideshow state, focused panel, and environment mode
 in browser storage. Reloading the page or returning later restores the layout.
 
@@ -491,6 +511,14 @@ Desktop preview is useful for arranging a test layout and checking the server:
 - Use the mouse wheel over a panel to resize it; when locked or in Zoom mode,
   the wheel zooms its content.
 - Press `Esc` or use the upper-right close button to return home.
+
+In desktop preview each panel's **OPTIONS** (gear) control opens a standard
+2D window instead of the in-scene options panel used on Quest. The window
+appears near the panel, only for the focused panel, and can be dragged by its
+title bar; its position is kept while the preview stays open but is not saved
+with the layout. It offers the same choices as the Quest options panel: save
+mode, depth and lighting controls, and **Tags**. Close it with the **✕**
+button or by focusing the other panel.
 
 Physical passthrough and optical hand tracking can only be validated on Quest.
 

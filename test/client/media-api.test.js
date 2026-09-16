@@ -26,6 +26,37 @@ describe("MediaApi errors", () => {
     expect(options.body).toBeInstanceOf(FormData);
   });
 
+  it("includes auto-generation query params when options set", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ entries: [{ path: "uploads/new.jpg" }], auto: { depth: [], mask: [] } }),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetch);
+    const file = new File([new Uint8Array([1, 2, 3])], "new.jpg", { type: "image/jpeg" });
+
+    await new MediaApi().uploadImages([file], { autoDepth: true, autoMask: true, maxResolution: 1024 });
+
+    const [url] = fetch.mock.calls[0];
+    const query = new URL(url, "http://localhost").searchParams;
+    expect(query.get("auto_depth")).toBe("1");
+    expect(query.get("auto_mask")).toBe("1");
+    expect(query.get("max_resolution")).toBe("1024");
+  });
+
+  it("omits query params when auto-generation options are off", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ entries: [], auto: { depth: [], mask: [] } }),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetch);
+
+    const file = new File([new Uint8Array([1, 2, 3])], "new.jpg", { type: "image/jpeg" });
+    await new MediaApi().uploadImages([file], { autoDepth: false, autoMask: false });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url).toBe("/api/uploads");
+  });
+
   it("surfaces JSON API details without losing the response status", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
       JSON.stringify({ detail: "Tags are unavailable." }),
