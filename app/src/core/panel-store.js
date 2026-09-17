@@ -52,6 +52,15 @@ export function normalizeSlideshowMode(mode) {
 }
 
 /**
+ * Generates a unique-ish panel id for panels whose caller does not supply one.
+ * The default store factory and panel cloning share this so id shapes stay
+ * consistent regardless of how a panel is created.
+ */
+export function makePanelId() {
+  return `panel-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
  * Builds a normalized per-media saved pose entry.
  *
  * `scale` entries persist only dimensions; `full` entries also persist the
@@ -108,6 +117,65 @@ export function createPanel({ id, ...overrides } = {}) {
     mediaPoses: saveMode === "disabled"
       ? {}
       : normalizeMediaPoses(overrides.mediaPoses ?? migrateMediaScales(overrides.mediaScales), saveMode),
+  };
+}
+
+/**
+ * Horizontal gap (in metres) between a panel and its clone. The clone keeps
+ * the source's y/z position and orientation and is placed to the right.
+ */
+export const CLONE_SIDE_GAP = 0.15;
+
+/**
+ * Builds the `store.add()` payload that duplicates a panel's persistent media
+ * and display settings. The clone starts unminimized, unlocked, and with a
+ * fresh id (assigned by the store); transient states such as slideshow
+ * playback are intentionally not copied.
+ */
+export function buildClonePanelPayload(source = {}) {
+  const saveMode = normalizeSaveMode(source.saveMode);
+  const effectiveDimensions = dimensions(
+    source.minimized ? source.restoreDimensions ?? source.dimensions : source.dimensions,
+  );
+  const position = source.transform?.position ?? source.position ?? {};
+  const rotation = source.transform?.rotation ?? source.rotation ?? {};
+  const baseX = Number.isFinite(position.x) ? position.x : 0;
+  return {
+    locked: false,
+    minimized: false,
+    maskEnabled: source.maskEnabled !== false,
+    admEnabled: Boolean(source.admEnabled),
+    depthIntensity: depthIntensity(source.depthIntensity),
+    saveMode,
+    slideshowMode: normalizeSlideshowMode(source.slideshowMode),
+    slideshowTagIds: normalizeTagIds(source.slideshowTagIds),
+    tagFilter: normalizeTagIds(source.tagFilter),
+    media: {
+      directory: typeof source.media?.directory === "string" ? source.media.directory : null,
+      selectedId: source.media?.selectedId == null ? null : String(source.media.selectedId),
+      sort: Object.values(SORT_MODES).includes(source.media?.sort) ? source.media.sort : SORT_MODES.NAME,
+      view: ["names", "thumbnails", "grid"].includes(source.media?.view) ? source.media.view : "names",
+    },
+    transform: {
+      position: {
+        x: baseX + effectiveDimensions.width + CLONE_SIDE_GAP,
+        y: Number.isFinite(position.y) ? position.y : 0,
+        z: Number.isFinite(position.z) ? position.z : -1,
+      },
+      rotation: {
+        x: Number.isFinite(rotation.x) ? rotation.x : 0,
+        y: Number.isFinite(rotation.y) ? rotation.y : 0,
+        z: Number.isFinite(rotation.z) ? rotation.z : 0,
+      },
+    },
+    dimensions: { ...effectiveDimensions },
+    restoreDimensions: { ...effectiveDimensions },
+    mediaPoses: saveMode === "disabled"
+      ? {}
+      : normalizeMediaPoses(
+        source.mediaPoses ? copy(source.mediaPoses) : {},
+        saveMode,
+      ),
   };
 }
 
@@ -169,7 +237,7 @@ export function createPanelStore({ panels = [], focusedId = null, media, idFacto
   };
   state.focusedId = state.panels.some((panel) => panel.id === focusedId) ? focusedId : state.panels.at(-1)?.id ?? null;
   const subscribers = new Set();
-  const makeId = idFactory ?? (() => `panel-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
+  const makeId = idFactory ?? makePanelId;
 
   function emit(change = { type: "reset", panelIds: [] }) {
     const snapshot = copy(state);

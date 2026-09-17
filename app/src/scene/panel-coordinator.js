@@ -3,10 +3,12 @@ import * as THREE from "three";
 import {
   PanelStore,
   applyPanelGesture,
+  buildClonePanelPayload,
   createPersistentRandomSeed,
   createSlideshowState,
   isImage,
   interactionMode,
+  makePanelId,
   matchesTagFilter,
   mediaId,
   nextMedia,
@@ -391,6 +393,8 @@ export class PanelCoordinator {
     } else if (action === "toggle-minimize") {
       if (panel.minimized) this.store.restore(panelId);
       else this.store.minimize(panelId);
+    } else if (action === "clone-panel") {
+      this.clonePanel(panelId);
     } else if (action === "toggle-slideshow") {
       this.toggleSlideshow(panel);
     } else if (action === "toggle-mask") {
@@ -505,6 +509,33 @@ export class PanelCoordinator {
       ? nextMedia(runtime.playlist, panel.media.selectedId)
       : previousMedia(runtime.playlist, panel.media.selectedId);
     if (item) this.store.setMedia(panel.id, mediaId(item));
+  }
+
+  /**
+   * Duplicates a panel's persistent media and display settings into a new
+   * user-owned panel placed to the right of the source. The clone shares the
+   * source's playlist so previous/next works immediately; mask/ADM effects
+   * reload per panel from server-owned state when its media shows.
+   */
+  clonePanel(sourceId) {
+    const source = this.getPanel(sourceId);
+    if (!source) return null;
+    const payload = buildClonePanelPayload(source);
+    const cloneId = makePanelId();
+    const sourceRuntime = this.runtimeFor(sourceId);
+    this.runtime.set(cloneId, {
+      playlist: sourceRuntime.playlist.map(normalizeMediaEntry),
+      tagPlaylist: Array.isArray(sourceRuntime.tagPlaylist)
+        ? sourceRuntime.tagPlaylist.map(normalizeMediaEntry)
+        : sourceRuntime.tagPlaylist,
+      slideshow: createSlideshowState(),
+    });
+    try {
+      return this.store.add({ ...payload, id: cloneId });
+    } catch (error) {
+      if (!this.panelViews.has(cloneId)) this.runtime.delete(cloneId);
+      throw error;
+    }
   }
 
   toggleSlideshow(panel) {

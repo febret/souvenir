@@ -35,6 +35,7 @@ const CONTROL_DEFINITIONS = [
   ["▶️", "next", "700 148px system-ui, sans-serif"],
   ["🔒", "toggle-lock", "700 136px system-ui, sans-serif"],
   ["➖", "toggle-minimize", "700 142px system-ui, sans-serif"],
+  ["⧉", "clone-panel", "700 148px system-ui, sans-serif"],
   ["⚙️", "toggle-options", "700 148px system-ui, sans-serif"],
 ];
 const CONTROL_BUTTON_SIZE = 0.08;

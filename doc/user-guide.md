@@ -339,13 +339,17 @@ clock, so pausing or delayed playback cannot make the text drift. The caption
 card stays at the configured distance directly in front of the current desktop
 camera or Quest headset and continuously faces the viewer.
 
-Each focused full panel has nine controls along its top:
+Each focused full panel has a set of controls along its top:
 
 - **Media** opens the media browser.
 - **Lock** freezes position, orientation, and panel size. Hand movement now pans
   or zooms the content.
 - **Min** turns the panel into a fixed-size movable thumbnail. Pinch the
   thumbnail to restore it. A thumbnail can be moved but not resized.
+- **Clone** duplicates the panel to its right with
+  the same media and settings. The copy is a normal panel: it starts
+  unlocked and unminimized with its slideshow stopped, and can be moved,
+  retargeted, or changed independently.
 - **Play** starts or stops a slideshow using the panel's current directory and
   sort order.
 - **Zoom** switches gestures between panel transformation and content
