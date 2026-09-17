@@ -22,13 +22,13 @@
         <span id="connection-status" class="status-pill" role="status">Preparing library</span>
         <div class="launch-actions" aria-label="Open Souvenir">
           <button id="upload-button" class="secondary-button" type="button" disabled>
-            Upload images
+            Upload media
           </button>
           <input
             id="upload-input"
             class="visually-hidden"
             type="file"
-            accept="image/jpeg,image/png,image/webp,image/gif"
+            accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm"
             multiple
           />
           <button id="browse-button" class="secondary-button" type="button" disabled>
@@ -562,6 +562,8 @@
           </select>
         </label>
         <button id="browse-up" class="secondary-button compact-button" type="button">Up one folder</button>
+        <button id="browse-prev" class="secondary-button compact-button" type="button">← Prev</button>
+        <button id="browse-next" class="secondary-button compact-button" type="button">Next →</button>
         <p id="browse-state" class="browse-state" role="status" aria-live="polite"></p>
       </div>
       <div class="browse-workspace">

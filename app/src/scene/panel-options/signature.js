@@ -7,6 +7,8 @@
 export function computeSignature({
   saveMode,
   slideshowMode,
+  slideshowShuffle = false,
+  slideshowRepeat = "all",
   tagDefinitions,
   mediaTagIds,
   tagListExpanded,
@@ -16,6 +18,8 @@ export function computeSignature({
   return JSON.stringify({
     saveMode,
     slideshowMode,
+    slideshowShuffle: Boolean(slideshowShuffle),
+    slideshowRepeat: String(slideshowRepeat ?? "all"),
     tagListExpanded: Boolean(tagListExpanded),
     tags: (Array.isArray(tagDefinitions) ? tagDefinitions : []).map((t) => [t.id, t.name]),
     selected: Array.isArray(mediaTagIds) ? mediaTagIds : [],

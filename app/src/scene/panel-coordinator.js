@@ -6,6 +6,7 @@ import {
   buildClonePanelPayload,
   createPersistentRandomSeed,
   createSlideshowState,
+  cycleRepeatMode,
   isImage,
   interactionMode,
   makePanelId,
@@ -13,12 +14,14 @@ import {
   mediaId,
   nextMedia,
   normalizeMediaEntry,
+  normalizeRepeatMode,
   normalizeTagDefinitions,
   normalizeTagIds,
   panelColor,
   playbackPolicy,
   previousMedia,
   randomMedia,
+  shouldReplayAdvance,
   slideshowTransition,
   sortMedia,
 } from "../core/index.js";
@@ -377,6 +380,10 @@ export class PanelCoordinator {
       this.store.setSaveMode(panelId, action.slice("set-save-mode:".length));
     } else if (action.startsWith("set-slideshow-mode:")) {
       this.store.setSlideshowMode(panelId, action.slice("set-slideshow-mode:".length));
+    } else if (action === "toggle-slideshow-shuffle") {
+      this.store.setSlideshowShuffle(panelId, !panel.slideshowShuffle);
+    } else if (action === "cycle-slideshow-repeat") {
+      this.store.setSlideshowRepeat(panelId, cycleRepeatMode(panel.slideshowRepeat));
     } else if (action.startsWith("toggle-slideshow-tag:")) {
       const tagId = action.slice("toggle-slideshow-tag:".length);
       const selected = panel.slideshowTagIds.includes(tagId)
@@ -538,8 +545,18 @@ export class PanelCoordinator {
     }
   }
 
-  toggleSlideshow(panel) {
+  #syncSlideshowOptions(panel) {
     const runtime = this.runtimeFor(panel.id);
+    runtime.slideshow = {
+      ...runtime.slideshow,
+      shuffle: Boolean(panel.slideshowShuffle),
+      repeat: normalizeRepeatMode(panel.slideshowRepeat),
+    };
+    return runtime;
+  }
+
+  toggleSlideshow(panel) {
+    const runtime = this.#syncSlideshowOptions(panel);
     const type = runtime.slideshow.active ? "stop" : "start";
     runtime.slideshow = slideshowTransition(
       runtime.slideshow,
@@ -565,7 +582,7 @@ export class PanelCoordinator {
   }
 
   advanceSlideshow(panel, event) {
-    const runtime = this.runtimeFor(panel.id);
+    const runtime = this.#syncSlideshowOptions(panel);
     const current = [...runtime.playlist, ...(runtime.tagPlaylist ?? [])].find(
       (item) => mediaId(item) === panel.media.selectedId,
     );
@@ -585,7 +602,9 @@ export class PanelCoordinator {
       return;
     }
     if (transition.action?.media) {
+      const replay = shouldReplayAdvance(transition.action, panel.media.selectedId);
       this.store.setMedia(panel.id, mediaId(transition.action.media));
+      if (replay) this.showMedia(panel.id, transition.action.media);
     }
   }
 

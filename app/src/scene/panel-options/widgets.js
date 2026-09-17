@@ -130,7 +130,7 @@ export function addSaveModeSection(content, widgets, { labelY, rowY, saveMode })
   }
 }
 
-export function addSlideshowModeSection(content, widgets, { labelY, rowY, slideshowMode }) {
+export function addSlideshowModeSection(content, widgets, { labelY, rowY, row2Y, slideshowMode, slideshowShuffle = false, slideshowRepeat = "all" }) {
   content.add(widgets.sectionLabel("Slideshow mode", labelY));
   for (const [index, [label, value]] of [["Normal", "normal"], ["Tag", "tag"]].entries()) {
     const button = widgets.button(label, `set-slideshow-mode:${value}`, {
@@ -142,6 +142,23 @@ export function addSlideshowModeSection(content, widgets, { labelY, rowY, slides
     setButtonState(button, { active: slideshowMode === value });
     content.add(button);
   }
+  const shuffle = widgets.button("Shuffle", "toggle-slideshow-shuffle", {
+    x: -0.1275,
+    y: row2Y ?? rowY,
+    width: 0.23,
+    height: 0.05,
+  });
+  setButtonState(shuffle, { active: Boolean(slideshowShuffle) });
+  content.add(shuffle);
+  const repeatLabel = `Repeat: ${slideshowRepeat === "one" ? "One" : slideshowRepeat === "off" ? "Off" : "All"}`;
+  const repeat = widgets.button(repeatLabel, "cycle-slideshow-repeat", {
+    x: 0.1275,
+    y: row2Y ?? rowY,
+    width: 0.23,
+    height: 0.05,
+  });
+  setButtonState(repeat, { active: slideshowRepeat === "one" });
+  content.add(repeat);
 }
 
 export function addDepthSection(content, widgets, {

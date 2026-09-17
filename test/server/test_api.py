@@ -347,7 +347,7 @@ def test_upload_images_reject_non_images(client: TestClient):
         files=[("files", ("notes.txt", b"not-an-image", "text/plain"))],
     )
     assert response.status_code == 415
-    assert response.json()["detail"] == "upload content type must be image/*"
+    assert response.json()["detail"] == "upload content type must be image/* or video/mp4, video/webm"
 
 
 def test_upload_images_reject_invalid_image_payload(client: TestClient):

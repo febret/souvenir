@@ -188,7 +188,8 @@ instead of one browser.
 
 The title bar offers three ways to open Souvenir:
 
-- **Upload images** imports one or more local image files into
+- **Upload media** imports local image (JPEG, PNG, WebP, GIF) or video
+  (MP4, WebM) files into
   `<SOUVENIR_MEDIA_HOME>/<SOUVENIR_UPLOAD_DIRNAME>` (`uploads` by default).
   With **Generate depth on upload** and/or **Generate background mask on
   upload** checked in the Playback settings, every uploaded image is queued
@@ -215,7 +216,10 @@ videos.
 
 Select one item by clicking its thumbnail. Hold Ctrl (Windows/Linux) or Command
 (macOS) to toggle additional items, or Shift-click to select a range. **Select
-all** selects the visible media in the current folder. The Shared Tags panel
+all** selects the visible media in the current folder. Large folders are split
+into pages of 100 items (up to 500 in a folder); use **Prev/Next** to move
+between pages. Only the first 500 entries are available; additional items are
+not currently paged from the server. The Shared Tags panel
 edits every selected image or video together: checking a tag adds it to all
 selected items, and clearing it removes it from all selected items. A partially
 assigned tag first appears indeterminate.
@@ -487,7 +491,8 @@ A slideshow uses the last playlist and sort order selected for that panel:
   `ended` event.
 - **Play** stops the slideshow without clearing the current item.
 
-In the panel **Options** window, choose **Slideshow mode**:
+In the panel **Options** window, the **Slideshow mode** section offers
+playback controls that are saved with the panel:
 
 - **Normal** retains the playlist's ordered behavior above.
 - **Tag** shows up to five randomly chosen tags from the displayed item along
@@ -496,13 +501,16 @@ In the panel **Options** window, choose **Slideshow mode**:
   carrying all selected tags. Use **Clear** to remove retained selections.
   With no selected tags, Tag mode advances through the panel's current
   directory exactly like Normal mode.
+- **Shuffle** picks the next item randomly instead of following playlist order.
+- **Repeat** cycles `All` (wrap around) → `One` (replay the current item) →
+  `Off` (stop at the end of ordered playlists).
 
 Normal video selection follows the home-screen **Autoplay videos** preference.
 
 ## 8. Saved layouts
 
 Souvenir saves panel transforms and dimensions; selected media and directory;
-sort, view, tag filter, slideshow mode and selected slideshow tags, display mode, aspect ratio, and mask toggle; lock,
+sort, view, tag filter, slideshow mode, shuffle, repeat, and selected slideshow tags, display mode, aspect ratio, and mask toggle; lock,
 minimize, content pan/zoom, slideshow state, focused panel, and environment mode
 in browser storage. Reloading the page or returning later restores the layout.
 
@@ -526,15 +534,16 @@ Desktop preview is useful for arranging a test layout and checking the server:
 - Drag a panel to move it.
 - Use the mouse wheel over a panel to resize it; when locked or in Zoom mode,
   the wheel zooms its content.
-- Use the mouse wheel over a panel's **OPTIONS** window to rescale that window
-  up or down.
+- Use the mouse wheel over a panel's **OPTIONS** window title bar to rescale
+  the window up or down.
 - Press `Esc` or use the upper-right close button to return home.
 
 In desktop preview each panel's **OPTIONS** (gear) control opens a standard
 2D window instead of the in-scene options panel used on Quest. The window
 appears near the panel, only for the focused panel, and can be dragged by its
 title bar; its position is kept while the preview stays open but is not saved
-with the layout. Scroll the mouse wheel over the window to rescale it. It offers
+with the layout. Scroll the mouse wheel over the title bar to rescale it; the
+wheel still scrolls the tag list below it. It offers
 the same choices as the Quest options panel: save mode, depth and lighting
 controls, and **Tags**. Close it with the **✕** button or by focusing the other
 panel. On Quest the window is the in-scene OPTIONS chrome; pinch it with both
@@ -567,6 +576,9 @@ Physical passthrough and optical hand tracking can only be validated on Quest.
 
 ### A video does not play
 
+- Video thumbnails show a poster frame when the server has `ffmpeg`
+  available, otherwise a placeholder tile. Either way the video itself
+  streams directly.
 - Quest Browser must support the codec inside the MP4 or WebM container. H.264
   video with AAC audio in MP4 is the most broadly supported Quest choice.
 - Try selecting the video and pinching the center once if normal autoplay is

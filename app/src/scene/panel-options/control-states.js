@@ -33,6 +33,8 @@ function computeActive(action, state) {
     ambientColor,
     ambientIntensity,
     slideshowMode,
+    slideshowShuffle = false,
+    slideshowRepeat = "all",
   } = state;
   if (action === "toggle-mask") return Boolean(maskEnabled && maskAvailable);
   if (action === "toggle-3d-mode") return Boolean(admEnabled);
@@ -41,6 +43,8 @@ function computeActive(action, state) {
   if (action === "toggle-focus-blur") return Boolean(focusBlurEnabled);
   if (action === "toggle-light-fx") return Boolean(lightFxEnabled);
   if (action.startsWith("set-slideshow-mode:")) return action.slice("set-slideshow-mode:".length) === slideshowMode;
+  if (action === "toggle-slideshow-shuffle") return Boolean(slideshowShuffle);
+  if (action === "cycle-slideshow-repeat") return slideshowRepeat === "one";
   const [, value] = action.split(":");
   if (action.startsWith("set-light-direction:")) return value === lightDirection;
   if (action.startsWith("set-light-color:")) return value === lightColor;
@@ -82,6 +86,8 @@ export function applyControlStates(content, {
   ambientColor,
   ambientIntensity,
   slideshowMode,
+  slideshowShuffle = false,
+  slideshowRepeat = "all",
   depthAvailable,
 }) {
   const state = {
@@ -100,6 +106,8 @@ export function applyControlStates(content, {
     ambientColor,
     ambientIntensity,
     slideshowMode,
+    slideshowShuffle,
+    slideshowRepeat,
     depthAvailable,
     lightingActive: admEnabled && mediaType === "image" && mediaLoaded && !admPromptVisible,
   };

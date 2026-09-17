@@ -5,6 +5,8 @@ export const SAVE_MODES = Object.freeze(["disabled", "scale", "full"]);
 export const DEFAULT_SAVE_MODE = "scale";
 export const SLIDESHOW_MODES = Object.freeze(["normal", "tag"]);
 export const DEFAULT_SLIDESHOW_MODE = "normal";
+export const SLIDESHOW_REPEAT_MODES = Object.freeze(["off", "all", "one"]);
+export const DEFAULT_SLIDESHOW_REPEAT = "all";
 
 /**
  * Fixed outline palette. Panels are identified by number and color; color is
@@ -51,6 +53,10 @@ export function normalizeSlideshowMode(mode) {
   return SLIDESHOW_MODES.includes(mode) ? mode : DEFAULT_SLIDESHOW_MODE;
 }
 
+export function normalizeSlideshowRepeat(mode) {
+  return SLIDESHOW_REPEAT_MODES.includes(mode) ? mode : DEFAULT_SLIDESHOW_REPEAT;
+}
+
 /**
  * Generates a unique-ish panel id for panels whose caller does not supply one.
  * The default store factory and panel cloning share this so id shapes stay
@@ -95,6 +101,8 @@ export function createPanel({ id, ...overrides } = {}) {
     depthIntensity: depthIntensity(overrides.depthIntensity),
     saveMode,
     slideshowMode: normalizeSlideshowMode(overrides.slideshowMode),
+    slideshowShuffle: Boolean(overrides.slideshowShuffle),
+    slideshowRepeat: normalizeSlideshowRepeat(overrides.slideshowRepeat),
     slideshowTagIds: normalizeTagIds(overrides.slideshowTagIds),
     tagFilter: normalizeTagIds(overrides.tagFilter),
     media: {
@@ -148,6 +156,8 @@ export function buildClonePanelPayload(source = {}) {
     depthIntensity: depthIntensity(source.depthIntensity),
     saveMode,
     slideshowMode: normalizeSlideshowMode(source.slideshowMode),
+    slideshowShuffle: Boolean(source.slideshowShuffle),
+    slideshowRepeat: normalizeSlideshowRepeat(source.slideshowRepeat),
     slideshowTagIds: normalizeTagIds(source.slideshowTagIds),
     tagFilter: normalizeTagIds(source.tagFilter),
     media: {
@@ -547,6 +557,26 @@ export function createPanelStore({ panels = [], focusedId = null, media, idFacto
       if (!current) return null;
       if (current.slideshowMode === nextMode) return copy(current);
       const panel = updatePanel(id, (item) => { item.slideshowMode = nextMode; });
+      emit({ type: "panel", panelIds: [id] });
+      return copy(panel);
+    },
+    setSlideshowShuffle(id, shuffle) {
+      const next = Boolean(shuffle);
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      if (Boolean(current.slideshowShuffle) === next) return copy(current);
+      const panel = updatePanel(id, (item) => { item.slideshowShuffle = next; });
+      if (!panel) return null;
+      emit({ type: "panel", panelIds: [id] });
+      return copy(panel);
+    },
+    setSlideshowRepeat(id, mode) {
+      const next = normalizeSlideshowRepeat(mode);
+      const current = state.panels.find((panel) => panel.id === id);
+      if (!current) return null;
+      if ((current.slideshowRepeat ?? DEFAULT_SLIDESHOW_REPEAT) === next) return copy(current);
+      const panel = updatePanel(id, (item) => { item.slideshowRepeat = next; });
+      if (!panel) return null;
       emit({ type: "panel", panelIds: [id] });
       return copy(panel);
     },

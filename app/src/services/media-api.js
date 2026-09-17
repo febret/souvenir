@@ -6,6 +6,8 @@ export class MediaApiError extends Error {
   }
 }
 
+export const DIRECTORY_PAGE_LIMIT = 500;
+
 async function readJson(response) {
   if (!response.ok) {
     const text = await response.text();
@@ -61,18 +63,30 @@ export class MediaApi {
     return readJson(await fetch(`${this.baseUrl}/api/tree`));
   }
 
-  async directory(path = "", includedDirectories = []) {
+  async directory(path = "", includedDirectories = [], options = {}) {
+    const opts = options ?? {};
     const url = addPath(new URL(`${this.baseUrl}/api/media`, window.location.origin), path);
     for (const directory of includedDirectories) {
       url.searchParams.append("included_dirs", directory);
+    }
+    if (opts.sort) url.searchParams.set("sort", String(opts.sort));
+    if (opts.limit != null && Number.isInteger(opts.limit) && opts.limit > 0) {
+      url.searchParams.set("limit", String(opts.limit));
+    }
+    if (opts.offset != null && Number.isInteger(opts.offset) && opts.offset >= 0) {
+      url.searchParams.set("offset", String(opts.offset));
     }
     return readJson(await fetch(url));
   }
 
   async uploadImages(files, options = {}) {
+    return this.uploadMedia(files, options);
+  }
+
+  async uploadMedia(files, options = {}) {
     const uploads = Array.from(files ?? []);
     if (!uploads.length) {
-      throw new MediaApiError("Select at least one image to upload.");
+      throw new MediaApiError("Select at least one file to upload.");
     }
     const form = new FormData();
     uploads.forEach((file) => {
@@ -322,11 +336,15 @@ export class MediaApi {
     })));
   }
 
-  thumbnailUrl(path) {
+  thumbnailUrl(path, options = {}) {
     const url = addPath(
       new URL(`${this.baseUrl}/api/thumbnail`, window.location.origin),
       path,
     );
+    const posterTime = options?.posterTime;
+    if (typeof posterTime === "number" && Number.isFinite(posterTime)) {
+      url.searchParams.set("poster_time", String(posterTime));
+    }
     return url.toString();
   }
 

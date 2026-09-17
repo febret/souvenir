@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import threading
@@ -26,6 +27,9 @@ class TagStore:
     def __init__(self, root: Path) -> None:
         self._path = root / TAG_STORAGE_FILE
         self._lock = threading.RLock()
+        self._cached_state: dict | None = None
+        self._cached_mtime_ns: int = -1
+        self._cached_size: int = -1
 
     def list_tags(self) -> dict[str, list[dict[str, str]] | str | None]:
         with self._lock:
@@ -104,22 +108,7 @@ class TagStore:
         with self._lock:
             state = self._load()
             return {
-                path: {
-                    "enabled": bool(setting.get("enabled", False)),
-                    "depth_intensity": float(setting.get("depth_intensity", DEFAULT_ADM_DEPTH_INTENSITY)),
-                    "soft_depth_enabled": bool(setting.get("soft_depth_enabled", False)),
-                    "soft_depth_blur": float(setting.get("soft_depth_blur", 12)),
-                    "fade_depth_enabled": bool(setting.get("fade_depth_enabled", False)),
-                    "fade_depth_start": float(setting.get("fade_depth_start", 0.5)),
-                    "focus_blur_enabled": bool(setting.get("focus_blur_enabled", False)),
-                    "focus_position": str(setting.get("focus_position", "middle")),
-                    "focus_strength": str(setting.get("focus_strength", "middle")),
-                    "light_fx_enabled": bool(setting.get("light_fx_enabled", False)),
-                    "light_direction": str(setting.get("light_direction", "front")),
-                    "light_color": str(setting.get("light_color", "white")),
-                    "ambient_color": str(setting.get("ambient_color", "white")),
-                    "ambient_intensity": float(setting.get("ambient_intensity", 0.5)),
-                }
+                path: _normalize_adm_setting(setting)
                 for path, setting in state["media_adm_settings"].items()
                 if isinstance(setting, dict)
             }
@@ -306,6 +295,17 @@ class TagStore:
             state["media_adm_settings"].pop(path, None)
             self._save(state)
 
+    def listing_snapshot(self) -> tuple[dict[str, list[str]], dict[str, dict[str, bool | float | str]]]:
+        with self._lock:
+            state = self._load()
+            assignments = {path: list(tag_ids) for path, tag_ids in state["media_assignments"].items()}
+            adm = {
+                path: _normalize_adm_setting(setting)
+                for path, setting in state["media_adm_settings"].items()
+                if isinstance(setting, dict)
+            }
+            return assignments, adm
+
     def _tag_ids(self, namespace: str, relative: Path) -> list[str]:
         with self._lock:
             state = self._load()
@@ -344,14 +344,29 @@ class TagStore:
         if self._path.is_symlink() or (self._path.exists() and not self._path.is_file()):
             raise HTTPException(500, "tag storage is invalid")
         if not self._path.exists():
-            return _empty_state()
+            empty = _empty_state()
+            self._cached_state = empty
+            self._cached_mtime_ns = -1
+            self._cached_size = -1
+            return copy.deepcopy(empty)
+        try:
+            stat = self._path.stat()
+        except OSError as error:
+            raise HTTPException(500, "tag storage is malformed") from error
+        cached = self._cached_state
+        if (
+            cached is not None
+            and stat.st_mtime_ns == self._cached_mtime_ns
+            and stat.st_size == self._cached_size
+        ):
+            return copy.deepcopy(cached)
         try:
             loaded = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
             raise HTTPException(500, "tag storage is malformed") from error
         self._validate_state(loaded)
         if loaded["version"] == 1:
-            return {
+            migrated = {
                 "version": 5,
                 "updated_at": loaded["updated_at"],
                 "tags": loaded["tags"],
@@ -361,28 +376,47 @@ class TagStore:
                 "commentary_volumes": {},
                 "media_adm_settings": {},
             }
+            self._cached_state = migrated
+            self._cached_mtime_ns = stat.st_mtime_ns
+            self._cached_size = stat.st_size
+            return copy.deepcopy(migrated)
         if loaded["version"] == 2:
-            return {
+            migrated = {
                 **loaded,
                 "version": 5,
                 "commentary_captions": {},
                 "commentary_volumes": {},
                 "media_adm_settings": {},
             }
+            self._cached_state = migrated
+            self._cached_mtime_ns = stat.st_mtime_ns
+            self._cached_size = stat.st_size
+            return copy.deepcopy(migrated)
         if loaded["version"] == 3:
-            return {
+            migrated = {
                 **loaded,
                 "version": 5,
                 "commentary_volumes": {},
                 "media_adm_settings": {},
             }
+            self._cached_state = migrated
+            self._cached_mtime_ns = stat.st_mtime_ns
+            self._cached_size = stat.st_size
+            return copy.deepcopy(migrated)
         if loaded["version"] == 4:
-            return {
+            migrated = {
                 **loaded,
                 "version": 5,
                 "media_adm_settings": {},
             }
-        return loaded
+            self._cached_state = migrated
+            self._cached_mtime_ns = stat.st_mtime_ns
+            self._cached_size = stat.st_size
+            return copy.deepcopy(migrated)
+        self._cached_state = loaded
+        self._cached_mtime_ns = stat.st_mtime_ns
+        self._cached_size = stat.st_size
+        return copy.deepcopy(loaded)
 
     def _save(self, state: dict) -> None:
         state["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -397,6 +431,13 @@ class TagStore:
         except OSError as error:
             self._cleanup(temporary)
             raise HTTPException(500, "tag storage could not be updated") from error
+        try:
+            stat = self._path.stat()
+            self._cached_state = copy.deepcopy(state)
+            self._cached_mtime_ns = stat.st_mtime_ns
+            self._cached_size = stat.st_size
+        except OSError:
+            self._cached_state = None
 
     @staticmethod
     def _cleanup(path: Path) -> None:
@@ -532,6 +573,25 @@ def _empty_state() -> dict:
         "commentary_captions": {},
         "commentary_volumes": {},
         "media_adm_settings": {},
+    }
+
+
+def _normalize_adm_setting(setting: dict) -> dict:
+    return {
+        "enabled": bool(setting.get("enabled", False)),
+        "depth_intensity": float(setting.get("depth_intensity", DEFAULT_ADM_DEPTH_INTENSITY)),
+        "soft_depth_enabled": bool(setting.get("soft_depth_enabled", False)),
+        "soft_depth_blur": float(setting.get("soft_depth_blur", 12)),
+        "fade_depth_enabled": bool(setting.get("fade_depth_enabled", False)),
+        "fade_depth_start": float(setting.get("fade_depth_start", 0.5)),
+        "focus_blur_enabled": bool(setting.get("focus_blur_enabled", False)),
+        "focus_position": str(setting.get("focus_position", "middle")),
+        "focus_strength": str(setting.get("focus_strength", "middle")),
+        "light_fx_enabled": bool(setting.get("light_fx_enabled", False)),
+        "light_direction": str(setting.get("light_direction", "front")),
+        "light_color": str(setting.get("light_color", "white")),
+        "ambient_color": str(setting.get("ambient_color", "white")),
+        "ambient_intensity": float(setting.get("ambient_intensity", 0.5)),
     }
 
 

@@ -75,10 +75,18 @@ describe("panel options control states", () => {
     expect(computePanelControlState("set-save-mode:scale", BASE_STATE)).toEqual({ active: false, inactive: false });
   });
 
-  it("marks the active slideshow mode", () => {
+  it("marks the active slideshow mode, shuffle, and repeat", () => {
     expect(computePanelControlState("set-slideshow-mode:tag", { ...BASE_STATE, slideshowMode: "tag" }))
       .toEqual({ active: true, inactive: false });
     expect(computePanelControlState("set-slideshow-mode:normal", { ...BASE_STATE, slideshowMode: "tag" }))
+      .toEqual({ active: false, inactive: false });
+    expect(computePanelControlState("toggle-slideshow-shuffle", { ...BASE_STATE, slideshowShuffle: true }))
+      .toEqual({ active: true, inactive: false });
+    expect(computePanelControlState("toggle-slideshow-shuffle", BASE_STATE))
+      .toEqual({ active: false, inactive: false });
+    expect(computePanelControlState("cycle-slideshow-repeat", { ...BASE_STATE, slideshowRepeat: "one" }))
+      .toEqual({ active: true, inactive: false });
+    expect(computePanelControlState("cycle-slideshow-repeat", { ...BASE_STATE, slideshowRepeat: "all" }))
       .toEqual({ active: false, inactive: false });
   });
 

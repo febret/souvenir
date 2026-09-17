@@ -24,7 +24,8 @@ export function computeLayout({ tagCount, expandedTags }) {
   const saveRowY = saveLabelY - 0.03 - SECTION_GAP - SAVE_ROW_HEIGHT / 2;
   const slideshowLabelY = saveRowY - SAVE_ROW_HEIGHT / 2 - SECTION_GAP - DEPTH_LABEL_HEIGHT / 2;
   const slideshowRowY = slideshowLabelY - DEPTH_LABEL_HEIGHT / 2 - SECTION_GAP - SAVE_ROW_HEIGHT / 2;
-  const depthLabelY = slideshowRowY - SAVE_ROW_HEIGHT / 2 - SECTION_GAP - DEPTH_LABEL_HEIGHT / 2;
+  const slideshowRow2Y = slideshowRowY - SAVE_ROW_HEIGHT / 2 - ROW_GAP - SAVE_ROW_HEIGHT / 2;
+  const depthLabelY = slideshowRow2Y - SAVE_ROW_HEIGHT / 2 - SECTION_GAP - DEPTH_LABEL_HEIGHT / 2;
   const depthSliderY = depthLabelY - DEPTH_LABEL_HEIGHT / 2 - ROW_GAP - ADM_SLIDER_HEIGHT / 2;
   const depthSlidersBottomY = depthSliderY
     - (ADM_SLIDER_COUNT - 1) * ADM_SLIDER_ROW_STEP
@@ -53,6 +54,7 @@ export function computeLayout({ tagCount, expandedTags }) {
     saveRowY,
     slideshowLabelY,
     slideshowRowY,
+    slideshowRow2Y,
     depthLabelY,
     depthSliderY,
     effectButtonY,

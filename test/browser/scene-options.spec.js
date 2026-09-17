@@ -39,12 +39,11 @@ function inlineScale(transform) {
   return match ? Number(match[1]) : 1;
 }
 
-async function windowCenter(window) {
-  const center = await window.evaluate((element) => {
+async function elementCenter(locator) {
+  return locator.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   });
-  return center;
 }
 
 async function optionsScale(page, panelId) {
@@ -213,7 +212,7 @@ test("selects persisted tag slideshow mode from panel options", async ({ page })
   await expect(window.locator('[data-action="set-slideshow-mode:tag"]')).toHaveClass(/is-active/);
 });
 
-test("mouse wheel rescales the options window 2D", async ({ page }) => {
+test("mouse wheel over the title bar rescales the options window 2D", async ({ page }) => {
   await openDesktopPreview(page);
   const panelId = await firstPanelId(page);
 
@@ -222,20 +221,31 @@ test("mouse wheel rescales the options window 2D", async ({ page }) => {
   await expect(window).toBeVisible();
   expect(inlineScale(await window.evaluate((el) => el.style.transform))).toBe(1);
 
-  const center = await windowCenter(window);
-  await page.mouse.move(center.x, center.y);
+  const titlebar = window.locator(".scene-options-window__titlebar");
+  const titlebarCenter = await elementCenter(titlebar);
+  await page.mouse.move(titlebarCenter.x, titlebarCenter.y);
   await page.mouse.wheel(0, -240);
 
   await expect
     .poll(async () => inlineScale(await window.evaluate((el) => el.style.transform)))
     .toBeGreaterThan(1);
 
-  const scaled = inlineScale(await window.evaluate((el) => el.style.transform));
+  // Wheel over the body is left untouched so it can keep scrolling the list.
+  const bodyCenter = await elementCenter(window.locator(".scene-options-window__body"));
+  await page.mouse.move(bodyCenter.x, bodyCenter.y);
+  const beforeBody = inlineScale(await window.evaluate((el) => el.style.transform));
   await page.mouse.wheel(0, 480);
+  const afterBody = inlineScale(await window.evaluate((el) => el.style.transform));
+  expect(afterBody).toBe(beforeBody);
 
+  // The window zooms around its center, so the title bar has moved since it
+  // was measured at scale 1; re-measure before rolling the wheel down.
+  const titlebarCenterScaled = await elementCenter(titlebar);
+  await page.mouse.move(titlebarCenterScaled.x, titlebarCenterScaled.y);
+  await page.mouse.wheel(0, 480);
   await expect
     .poll(async () => inlineScale(await window.evaluate((el) => el.style.transform)))
-    .toBeLessThan(scaled);
+    .toBeLessThan(beforeBody);
 });
 
 test("scales the in-scene options chrome from a two-hand gesture", async ({ page }) => {

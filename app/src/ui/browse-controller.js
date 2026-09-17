@@ -37,6 +37,8 @@ export class BrowseController {
     this.entries = [];
     this.selectedIds = new Set();
     this.anchorIndex = null;
+    this.page = 0;
+    this.pageSize = 100;
     this.loadingGeneration = 0;
     this.savingTags = false;
     this.viewerEntry = null;
@@ -60,6 +62,8 @@ export class BrowseController {
       typeFilter: document.querySelector("#browse-type-filter"),
       tagCountFilter: document.querySelector("#browse-tag-count-filter"),
       up: document.querySelector("#browse-up"),
+      pagePrev: document.querySelector("#browse-prev"),
+      pageNext: document.querySelector("#browse-next"),
       state: document.querySelector("#browse-state"),
       grid: document.querySelector("#browse-grid"),
       selectionStatus: document.querySelector("#browse-selection-status"),
@@ -109,12 +113,13 @@ export class BrowseController {
     this.path = next;
     this.selectedIds.clear();
     this.anchorIndex = null;
+    this.page = 0;
     this.elements.state.textContent = "Loading media…";
     this.elements.grid.setAttribute("aria-busy", "true");
     this.#renderBreadcrumbs();
     this.#renderSelection();
     try {
-      const payload = await this.api.directory(next, this.selectedDirectories());
+      const payload = await this.api.directory(next, this.selectedDirectories(), { limit: 500 });
       if (generation !== this.loadingGeneration) return;
       const rawEntries = Array.isArray(payload)
         ? payload
@@ -153,14 +158,17 @@ export class BrowseController {
       this.navigate(parentDirectoryPath(this.path)));
     this.elements.sort.addEventListener("change", () => {
       this.anchorIndex = null;
+      this.page = 0;
       this.#render();
     });
     this.elements.typeFilter.addEventListener("change", () => {
       this.anchorIndex = null;
+      this.page = 0;
       this.#render();
     });
     this.elements.tagCountFilter.addEventListener("change", () => {
       this.anchorIndex = null;
+      this.page = 0;
       this.#render();
     });
     this.elements.selectAll.addEventListener("click", () => {
@@ -174,6 +182,14 @@ export class BrowseController {
       this.#render();
     });
     this.elements.viewerClose.addEventListener("click", () => this.closeViewer());
+    this.elements.pagePrev?.addEventListener("click", () => {
+      this.page = Math.max(0, this.page - 1);
+      this.#render();
+    });
+    this.elements.pageNext?.addEventListener("click", () => {
+      this.page += 1;
+      this.#render();
+    });
     this.elements.previous.addEventListener("click", () => this.#stepViewer(-1));
     this.elements.next.addEventListener("click", () => this.#stepViewer(1));
     this.elements.zoomIn.addEventListener("click", () => this.#zoomBy(1.25));
@@ -233,17 +249,29 @@ export class BrowseController {
     const visibleMedia = entries.filter((entry) => entry.kind !== "directory");
     const visibleIds = new Set(visibleMedia.map((entry) => entry.path));
     this.selectedIds = new Set([...this.selectedIds].filter((id) => visibleIds.has(id)));
+    const pageCount = Math.max(1, Math.ceil(entries.length / this.pageSize));
+    this.page = Math.min(Math.max(0, this.page), pageCount - 1);
+    const pageEntries = entries.slice(this.page * this.pageSize, (this.page + 1) * this.pageSize);
     this.elements.grid.replaceChildren();
-    entries.forEach((entry) => {
+    pageEntries.forEach((entry) => {
       if (entry.kind === "directory") this.elements.grid.append(this.#directoryCard(entry));
       else this.elements.grid.append(this.#mediaCard(entry, visibleMedia));
     });
     const mediaCount = visibleMedia.length;
     const folderCount = entries.length - mediaCount;
+    const pageLabel = pageCount > 1 ? ` · page ${this.page + 1}/${pageCount}` : "";
     this.elements.state.textContent = entries.length
-      ? `${mediaCount} media item${mediaCount === 1 ? "" : "s"}${folderCount ? ` · ${folderCount} folder${folderCount === 1 ? "" : "s"}` : ""}`
+      ? `${mediaCount} media item${mediaCount === 1 ? "" : "s"}${folderCount ? ` · ${folderCount} folder${folderCount === 1 ? "" : "s"}` : ""}${pageLabel}`
       : "No matching media in this folder.";
     this.elements.up.disabled = !this.path;
+    if (this.elements.pagePrev) {
+      this.elements.pagePrev.disabled = this.page <= 0;
+      this.elements.pagePrev.setAttribute("aria-label", "Previous page");
+    }
+    if (this.elements.pageNext) {
+      this.elements.pageNext.disabled = this.page >= pageCount - 1;
+      this.elements.pageNext.setAttribute("aria-label", "Next page");
+    }
     this.#renderBreadcrumbs();
     this.#renderSelection();
   }

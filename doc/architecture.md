@@ -163,11 +163,11 @@ media routes.
 | `GET /api/health` | Worker health, media-home diagnostic, and `library_id` |
 | `GET /api/library-status` | First-load scan progress plus `library_id` |
 | `GET /api/tree` | Recursive directory metadata |
-| `GET /api/media?path=` | One directory's child directories and media entries |
+| `GET /api/media?path=` | One directory's child directories and media entries, with optional `sort`, bounded `limit`/`offset` pagination (default 200, max 500), and `total`/`has_more`; the portal and XR browser request the 500 maximum and page that result client-side |
 | `DELETE /api/media?path=` | Move a validated media file to the internal `.trashcan` and purge its derived state |
-| `POST /api/uploads` | Validate and store one or more uploaded images under `<media_home>/<upload_dirname>`. Optional `auto_depth`/`auto_mask` flags queue queued images for ADM depth and background mask generation via the existing services. |
-| `GET, HEAD /api/file?path=` | Full or single-range media streaming |
-| `GET /api/thumbnail?path=` | Cached JPEG image thumbnail or video placeholder |
+| `POST /api/uploads` | Validate and store one or more uploaded images or videos under `<media_home>/<upload_dirname>`. Optional `auto_depth`/`auto_mask` flags queue queued images for ADM depth and background mask generation via the existing services. |
+| `GET, HEAD /api/file?path=` | Full or single-range media streaming with `ETag`/`If-Range` support |
+| `GET /api/thumbnail?path=` | Cached JPEG image thumbnail or video poster frame (`poster_time` 0–60s), `ETag`-conditional |
 | `GET /api/mask-info?path=` | No-store mask presence, blur, timestamp, and URL |
 | `GET /api/mask?path=` | Raw persisted erase-mask PNG |
 | `PUT /api/mask?path=&blur=` | Validate and save normalized PNG + blur metadata |
@@ -189,11 +189,16 @@ media routes.
 | `GET, PUT /api/commentary-volume?path=` | Read or replace one sound's normalized 0–1 volume |
 
 Video seeking depends on byte-range responses. Valid ranges return `206` with
-`Content-Range`; invalid ranges return `416`.
+`Content-Range`; invalid ranges return `416`. Media and thumbnail responses
+carry an `ETag` derived from file size and modification time and honor
+`If-None-Match` (`304`) and `If-Range` (stale validators fall back to `200`).
 
 `upload_dirname` defaults to `uploads` and is configurable with
 `SOUVENIR_UPLOAD_DIRNAME`. Uploads remain inside `SOUVENIR_MEDIA_HOME` and then
-flow through normal media listing/file/thumbnail APIs.
+flow through normal media listing/file/thumbnail APIs. `POST /api/uploads`
+accepts images (JPEG, PNG, WebP, GIF up to 64 MiB, Pillow-validated) and videos
+(MP4, WebM up to 512 MiB, container-magic validated); depth/mask auto-generation
+flags apply to images only.
 
 When the portal's **Generate depth on upload** / **Generate background mask on
 upload** settings are enabled, the client appends `auto_depth=1`, `auto_mask=1`,
@@ -209,8 +214,12 @@ services.
 ### Thumbnails and masks
 
 `server/thumbnails.py` caches path-hashed JPEGs under
-`.souvenir-thumbnails`. Image thumbnails use Pillow and EXIF transpose. Videos
-use a generated placeholder, avoiding an FFmpeg runtime dependency.
+`.souvenir-thumbnails`. Image thumbnails use Pillow and EXIF transpose. Video
+posters use an `ffmpeg` frame grab at a clamped `poster_time` (default 1s) when
+`ffmpeg` is installed, falling back to the generated placeholder otherwise, so
+there is no new runtime dependency. Poster cache keys include the quantized
+poster time plus size/mtime validation. Per-path locks deduplicate concurrent
+generations for the same thumbnail.
 
 `server/masks.py:MaskStore` stores a raw erase-mask PNG and JSON metadata under
 `.souvenir-masks`, keyed by a SHA-256 of the normalized relative media path.
@@ -230,8 +239,11 @@ multi-writer deployments.
 
 `server/tags.py:TagStore` keeps stable tag definitions, separate media and
 commentary path assignments, commentary caption strings, and per-sound volume
-values in the atomic single-file store `.souvenir-tags.json`. Versions 1–3
-migrate to schema version 4 without losing assignments or captions. Captions
+values in the atomic single-file store `.souvenir-tags.json`. Reads are cached
+by file size/mtime under the store lock and invalidated on save, and
+`listing_snapshot()` serves assignments plus ADM settings from a single parse
+so directory listings no longer read the file twice. Versions 1–4
+migrate to schema version 5 without losing assignments or captions. Captions
 are trimmed, control-character checked, and limited to 5000 characters; volume
 is constrained to 0–1 and omitted from storage at its default of 1. Tag names
 are trimmed, length/control-character checked, limited to 100 definitions, and
@@ -448,14 +460,15 @@ keeps the 3D OPTIONS chrome out of the world. Window actions reuse the
 `PanelCoordinator.handleAction` and mask-workflow setting paths. A draggable
 title bar moves the window, and its position is remembered while the preview
 stays open but is not persisted to the layout. The mouse wheel over the window
-rescales it 2D (`transform: scale`) within shared bounds defined with the 3D
-chrome, and in passthrough a two-hand pinch on the options backdrop emits the
-same incremental `hands: 2`/`scale` gesture media panels use; `PanelView`
+title bar rescales it 2D (`transform: scale`) within shared bounds defined with
+the 3D chrome, and in passthrough a two-hand pinch on the options backdrop
+emits the same incremental `hands: 2`/`scale` gesture media panels use; `PanelView`
 applies it to the options group as a uniform rescale without persisting it.
 
 `app/src/scene/media-browser-view.js:MediaBrowserView` owns bounded directory
 navigation, pagination, view modes, sorting, thumbnail cards, and selection
-context. It keeps a working directory separate from an optional direct-child
+context. Thumbnail textures are held in a bounded LRU cache so page flips reuse
+downloads instead of refetching every card. It keeps a working directory separate from an optional direct-child
 preview, lists only media in the content grid, and delegates paginated child
 selection to `DirectoryMenu`. Media requests carry the portal's
 enabled-directory set, and a navigation generation rejects late directory
@@ -488,7 +501,10 @@ Content pan/zoom layers on these base mappings. Panel frame ratios independently
 cycle through Native, 1:1, 4:3, 3:2, 16:9, and 9:16.
 
 Slideshows keep per-panel runtime state. Images advance on the configured timer;
-videos autoplay in slideshow mode and advance only on `ended`. Normal mode
+videos autoplay in slideshow mode and advance only on `ended`. Per-panel
+`slideshowShuffle`/`slideshowRepeat` (`all`/`one`/`off`) persist in the panel
+store; repeat-one replays the current item and repeat-off stops ordered
+playback at the playlist end. Normal mode
 advances through the panel playlist. Tag mode exposes randomly sampled tags
 from the current item and randomly selects the next AND-matching item from all
 Portal-enabled directories; without selected slideshow tags it falls back to

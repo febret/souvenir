@@ -4,6 +4,7 @@ import json
 import re
 import uuid
 from datetime import datetime, timezone
+from email.utils import formatdate
 from io import BytesIO
 from pathlib import Path
 from typing import Iterator, Literal
@@ -16,11 +17,11 @@ from .auto_depth import AutoDepthGenerator, AutoDepthService
 from .auto_mask import AutoMaskGenerator, AutoMaskService
 from .commentary import COMMENTARY_TYPES, commentary_entries, commentary_type, resolve_commentary_file
 from .depth_maps import MAX_DEPTH_MAP_BYTES, DepthMapStore
-from .media import TTS_WORK_DIRNAME, cache_path, content_type, is_allowed, is_internal_path, is_media, media_type, media_url, metadata, parse_included_dirs, relative_text, resolve_under_root
+from .media import TTS_WORK_DIRNAME, content_type, file_etag, is_allowed, is_internal_path, is_media, media_type, media_url, metadata, parse_included_dirs, poster_cache_variants, relative_text, resolve_under_root
 from .scenes import SceneStore
 from .masks import MAX_MASK_BYTES, MaskStore
 from .tags import DEFAULT_ADM_DEPTH_INTENSITY, TagStore
-from .thumbnails import create_thumbnail
+from .thumbnails import POSTER_TIME_MAX, POSTER_TIME_MIN, create_thumbnail
 from .trash import move_media
 from .tts import (
     CommentaryTtsService,
@@ -33,6 +34,7 @@ from .tts import (
 
 _RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
 MAX_UPLOAD_IMAGE_BYTES = 64 * 1024 * 1024
+MAX_UPLOAD_VIDEO_BYTES = 512 * 1024 * 1024
 MAX_UPLOAD_IMAGE_DIMENSION = 16384
 MAX_UPLOAD_COMMENTARY_BYTES = 64 * 1024 * 1024
 _SUPPORTED_UPLOAD_IMAGE_FORMATS: dict[str, tuple[str, str]] = {
@@ -40,6 +42,10 @@ _SUPPORTED_UPLOAD_IMAGE_FORMATS: dict[str, tuple[str, str]] = {
     "PNG": ("image/png", ".png"),
     "WEBP": ("image/webp", ".webp"),
     "GIF": ("image/gif", ".gif"),
+}
+_SUPPORTED_UPLOAD_VIDEO_TYPES: dict[str, str] = {
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
 }
 
 
@@ -102,11 +108,22 @@ def _file_chunks(path: Path, start: int, length: int, chunk_size: int = 64 * 102
 
 
 def _stream_media(path: Path, request: Request, *, response_media_type: str | None = None) -> Response:
-    size = path.stat().st_size
+    stat = path.stat()
+    size = stat.st_size
     response_media_type = response_media_type or content_type(path)
-    headers = {"Accept-Ranges": "bytes"}
+    etag = file_etag(path)
+    last_modified = formatdate(stat.st_mtime, usegmt=True)
+    headers = {"Accept-Ranges": "bytes", "ETag": etag, "Last-Modified": last_modified}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
     range_header = request.headers.get("range")
     if range_header is None:
+        headers["Content-Length"] = str(size)
+        if request.method == "HEAD":
+            return Response(status_code=200, headers=headers, media_type=response_media_type)
+        return StreamingResponse(_file_chunks(path, 0, size), status_code=200, headers=headers, media_type=response_media_type)
+    if_range = request.headers.get("if-range")
+    if if_range is not None and if_range != etag:
         headers["Content-Length"] = str(size)
         if request.method == "HEAD":
             return Response(status_code=200, headers=headers, media_type=response_media_type)
@@ -161,19 +178,45 @@ def add_routes(
         return _tree(root, root, allowed)
 
     @app.get("/api/media")
-    def directory_listing(path: str = "", include: list[str] = Query(default=[]), included_dirs: list[str] = Query(default=[])) -> dict:
+    def directory_listing(
+        path: str = "",
+        include: list[str] = Query(default=[]),
+        included_dirs: list[str] = Query(default=[]),
+        sort: str = Query(default="name"),
+        limit: int = Query(default=200, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict:
         directory, relative = resolve_under_root(root, path, directory=True)
         _reject_internal_path(relative)
         allowed = _included(root, include, included_dirs)
-        assignments = tags.assignments()
-        adm_settings = tags.media_adm_settings()
+        assignments, adm_settings = tags.listing_snapshot()
+        children = _visible_children(root, directory, allowed)
+        total = len(children)
+        sort_mode = sort.lower() if isinstance(sort, str) else "name"
+        if sort_mode == "mtime":
+            def _mtime_key(item: Path) -> tuple[bool, int, str]:
+                try:
+                    mtime = item.stat().st_mtime_ns if item.exists() else 0
+                except OSError:
+                    mtime = 0
+                return (not item.is_dir(), -mtime, item.name.casefold())
+            children = sorted(children, key=_mtime_key)
+        elif sort_mode == "size":
+            def _size_key(item: Path) -> tuple[bool, int, str]:
+                try:
+                    size = item.stat().st_size if item.is_file() else -1
+                except OSError:
+                    size = -1
+                return (not item.is_dir(), size, item.name.casefold())
+            children = sorted(children, key=_size_key)
+        page = children[offset:offset + limit]
         entries = [
             metadata(
                 root,
                 child,
                 tag_ids=assignments.get(relative_text(child.relative_to(root)), []) if child.is_file() else [],
             )
-            for child in _visible_children(root, directory, allowed)
+            for child in page
         ]
         for entry in entries:
             if entry["kind"] != "file" or not entry["media_type"] or not entry["media_type"].startswith("image/"):
@@ -196,7 +239,7 @@ def add_routes(
                 "ambient_color": str(setting.get("ambient_color", "white")) if isinstance(setting, dict) else "white",
                 "ambient_intensity": float(setting.get("ambient_intensity", 0.5)) if isinstance(setting, dict) else 0.5,
             }
-        return {"path": relative_text(relative), "entries": entries, "directories": [entry for entry in entries if entry["kind"] == "directory"], "files": [entry for entry in entries if entry["kind"] == "file"]}
+        return {"path": relative_text(relative), "entries": entries, "directories": [entry for entry in entries if entry["kind"] == "directory"], "files": [entry for entry in entries if entry["kind"] == "file"], "total": total, "limit": limit, "offset": offset, "has_more": offset + len(entries) < total}
 
     @app.post("/api/uploads", status_code=201)
     async def upload_images(
@@ -206,10 +249,10 @@ def add_routes(
         max_resolution: int = Query(default=512, ge=64, le=2048),
     ) -> Response:
         if not files:
-            raise HTTPException(422, "at least one image file is required")
+            raise HTTPException(422, "at least one media file is required")
         if is_internal_path(upload_root.relative_to(root)):
             raise HTTPException(500, "upload path is invalid")
-        uploads: list[tuple[str, str, bytes]] = [await _read_upload_image(file) for file in files]
+        uploads: list[tuple[str, str, bytes]] = [await _read_upload_media(file) for file in files]
         try:
             upload_root.mkdir(parents=True, exist_ok=True)
         except OSError as error:
@@ -232,6 +275,8 @@ def add_routes(
         if generate_depth or generate_mask:
             for created_path in created:
                 relative = created_path.relative_to(root)
+                if not (media_type(created_path) or "").startswith("image/"):
+                    continue
                 if generate_depth:
                     queued_depth.append(auto_depth.request(relative, max_dimension=max_resolution))
                 if generate_mask:
@@ -536,16 +581,19 @@ def add_routes(
         return _stream_media(source, request)
 
     @app.get("/api/thumbnail")
-    def thumbnail(path: str):
+    def thumbnail(path: str, request: Request, poster_time: float = Query(default=1.0, ge=POSTER_TIME_MIN, le=POSTER_TIME_MAX)):
         source, relative = resolve_under_root(root, path, directory=False)
         _reject_internal_path(relative)
         if not media_type(source):
             raise HTTPException(404, "unsupported media type")
         try:
-            cached = create_thumbnail(root, source, relative)
-        except OSError as error:
+            cached = create_thumbnail(root, source, relative, poster_time=poster_time)
+        except (OSError, ValueError) as error:
             raise HTTPException(500, "thumbnail generation failed") from error
-        return FileResponse(cached, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+        etag = file_etag(cached)
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag})
+        return FileResponse(cached, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600", "ETag": etag})
 
     @app.delete("/api/media")
     def delete_media(path: str):
@@ -558,9 +606,10 @@ def add_routes(
         masks.delete(relative)
         depth_maps.delete(relative)
         try:
-            cache = cache_path(root, relative)
-            if cache.is_file() and not cache.is_symlink():
-                cache.unlink()
+            variants = poster_cache_variants(root, relative)
+            for cache in variants:
+                if cache.is_file() and not cache.is_symlink():
+                    cache.unlink()
         except OSError as error:
             raise HTTPException(
                 500,
@@ -767,6 +816,15 @@ async def _read_depth_body(request: Request) -> bytes:
     return b"".join(chunks)
 
 
+async def _read_upload_media(file: UploadFile) -> tuple[str, str, bytes]:
+    content_type_header = (file.content_type or "").split(";", 1)[0].strip().lower()
+    if content_type_header.startswith("image/"):
+        return await _read_upload_image(file)
+    if content_type_header in _SUPPORTED_UPLOAD_VIDEO_TYPES:
+        return await _read_upload_video(file)
+    raise HTTPException(415, "upload content type must be image/* or video/mp4, video/webm")
+
+
 async def _read_upload_image(file: UploadFile) -> tuple[str, str, bytes]:
     content_type_header = (file.content_type or "").split(";", 1)[0].strip().lower()
     if not content_type_header.startswith("image/"):
@@ -796,10 +854,50 @@ async def _read_upload_image(file: UploadFile) -> tuple[str, str, bytes]:
     return stem, suffix, payload
 
 
+def _looks_like_mp4(payload: bytes) -> bool:
+    return len(payload) >= 12 and payload[4:8] == b"ftyp"
+
+
+def _looks_like_webm(payload: bytes) -> bool:
+    return payload[:4] == b"\x1a\x45\xdf\xa3"
+
+
+async def _read_upload_video(file: UploadFile) -> tuple[str, str, bytes]:
+    content_type_header = (file.content_type or "").split(";", 1)[0].strip().lower()
+    canonical_suffix = _SUPPORTED_UPLOAD_VIDEO_TYPES.get(content_type_header)
+    if canonical_suffix is None:
+        raise HTTPException(415, "unsupported uploaded video format")
+    payload = await _read_bounded(file, MAX_UPLOAD_VIDEO_BYTES, too_large_message="uploaded video is too large")
+    if not payload:
+        raise HTTPException(422, "uploaded video is empty")
+    valid = _looks_like_mp4(payload) if canonical_suffix == ".mp4" else _looks_like_webm(payload)
+    if not valid:
+        raise HTTPException(415, "unsupported uploaded video format")
+    stem, suffix = _upload_stem_and_suffix_from_name(file.filename, fallback_suffix=canonical_suffix)
+    # Container magic already validated against the declared content type;
+    # trust the content type over the filename extension.
+    suffix = canonical_suffix
+    return stem, suffix, payload
+
+
+async def _read_bounded(file: UploadFile, max_bytes: int, *, too_large_message: str = "uploaded file is too large") -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while total <= max_bytes:
+        chunk = await file.read(min(1024 * 1024, max_bytes + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    if total > max_bytes:
+        raise HTTPException(413, too_large_message)
+    return b"".join(chunks)
+
+
 def _upload_stem_and_suffix_from_name(filename: str | None, *, fallback_suffix: str) -> tuple[str, str]:
     name = "" if filename is None else Path(filename).name.strip()
     if not name:
-        raise HTTPException(422, "uploaded image must have a filename")
+        raise HTTPException(422, "uploaded file must have a filename")
     candidate = Path(name)
     stem = candidate.stem.strip() if candidate.suffix else name
     stem = stem.rstrip(".")

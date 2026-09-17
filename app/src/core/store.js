@@ -28,6 +28,8 @@ export class PanelStore {
   setView(id, view) { return this.#store.setView(id, view); }
   setTagFilter(id, tagIds) { return this.#store.setTagFilter(id, tagIds); }
   setSlideshowMode(id, mode) { return this.#store.setSlideshowMode(id, mode); }
+  setSlideshowShuffle(id, shuffle) { return this.#store.setSlideshowShuffle(id, shuffle); }
+  setSlideshowRepeat(id, mode) { return this.#store.setSlideshowRepeat(id, mode); }
   setSlideshowTagIds(id, tagIds) {
     return this.#store.setSlideshowTagIds(id, tagIds);
   }

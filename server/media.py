@@ -117,16 +117,57 @@ def is_allowed(relative: Path, included: tuple[Path, ...]) -> bool:
     return any(relative == item or item in relative.parents or relative in item.parents for item in included)
 
 
-def cache_path(root: Path, relative: Path) -> Path:
+POSTER_TIME_MIN = 0.0
+POSTER_TIME_MAX = 60.0
+
+
+def clamp_poster_time(value: object) -> float:
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 1.0
+    if parsed != parsed:  # NaN
+        return 1.0
+    return max(POSTER_TIME_MIN, min(POSTER_TIME_MAX, parsed))
+
+
+def cache_path(root: Path, relative: Path, *, poster_time: float | None = None) -> Path:
     digest = hashlib.sha256(relative_text(relative).encode("utf-8")).hexdigest()
-    return root / CACHE_DIRECTORY / f"{digest}.jpg"
+    if poster_time is None:
+        return root / CACHE_DIRECTORY / f"{digest}.jpg"
+    quantized = clamp_poster_time(poster_time)
+    return root / CACHE_DIRECTORY / f"{digest}-t{quantized:.1f}.jpg"
+
+
+def poster_cache_variants(root: Path, relative: Path) -> list[Path]:
+    digest = hashlib.sha256(relative_text(relative).encode("utf-8")).hexdigest()
+    try:
+        return sorted((root / CACHE_DIRECTORY).glob(f"{digest}*.jpg"))
+    except OSError:
+        return []
 
 
 def thumbnail_is_current(cache: Path, source: Path) -> bool:
     try:
-        return cache.is_file() and cache.stat().st_mtime_ns >= source.stat().st_mtime_ns
+        if cache.is_symlink():
+            return False
+        cache_stat = cache.stat()
+        source_stat = source.stat()
+        return (
+            cache.is_file()
+            and cache_stat.st_mtime_ns >= source_stat.st_mtime_ns
+            and cache_stat.st_size > 0
+        )
     except OSError:
         return False
+
+
+def file_etag(path: Path) -> str:
+    try:
+        stat = path.stat()
+        return f'"{stat.st_size:x}-{stat.st_mtime_ns:x}"'
+    except OSError:
+        return '"0-0"'
 
 
 def content_type(path: Path) -> str:

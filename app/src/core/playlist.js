@@ -21,3 +21,9 @@ export function previousMedia(playlist, selectedId) {
   const index = mediaIndex(playlist, selectedId);
   return mediaAt(playlist, index < 0 ? -1 : index - 1);
 }
+
+export function isLastMedia(playlist, selectedId) {
+  const items = Array.isArray(playlist) ? playlist : [];
+  if (items.length === 0) return false;
+  return mediaIndex(items, selectedId) === items.length - 1;
+}

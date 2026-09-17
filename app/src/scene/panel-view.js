@@ -564,6 +564,8 @@ export class PanelView extends THREE.Group {
     const rebuilt = this.optionsPanel.update({
       saveMode: this.saveMode,
       slideshowMode: this.panel.slideshowMode,
+      slideshowShuffle: this.panel.slideshowShuffle,
+      slideshowRepeat: this.panel.slideshowRepeat ?? "all",
       tagDefinitions: this.tagDefinitions,
       mediaTagIds: this.mediaTagIds,
       tagListExpanded: this.tagListExpanded,
@@ -595,6 +597,8 @@ export class PanelView extends THREE.Group {
     this.optionsWindow.sync({
       saveMode: this.saveMode,
       slideshowMode: this.panel.slideshowMode,
+      slideshowShuffle: this.panel.slideshowShuffle,
+      slideshowRepeat: this.panel.slideshowRepeat ?? "all",
       tagDefinitions: this.tagDefinitions,
       mediaTagIds: this.mediaTagIds,
       tagListExpanded: this.tagListExpanded,
@@ -1247,6 +1251,8 @@ export class PanelView extends THREE.Group {
           ambientColor: this.ambientColor,
           ambientIntensity: this.ambientIntensity,
           slideshowMode: this.panel.slideshowMode,
+          slideshowShuffle: this.panel.slideshowShuffle,
+          slideshowRepeat: this.panel.slideshowRepeat ?? "all",
           depthAvailable: Boolean(this.depthMapCanvas),
           lightingActive: this.admEnabled
             && this.mediaType === "image"

@@ -32,6 +32,7 @@ export class PanelOptionsWindow {
     this.onAction = onAction ?? null;
     this.onAdmSetting = onAdmSetting ?? null;
     this.signature = "";
+    this.slideshowSyncSignature = "";
     this.controlState = null;
     this.position = null;
     this.scale = 1;
@@ -151,9 +152,11 @@ export class PanelOptionsWindow {
 
   #attachResize() {
     const root = this.element;
+    const titlebar = this.titlebar;
     root.addEventListener(
       "wheel",
       (event) => {
+        if (!event.target?.closest?.(`.${BASE_CLASS}__titlebar`)) return;
         event.preventDefault();
         event.stopPropagation();
         this.scale = clampOptionsScale(this.scale * Math.exp(-event.deltaY * 0.001));
@@ -161,6 +164,7 @@ export class PanelOptionsWindow {
       },
       { passive: false },
     );
+    titlebar.setAttribute("title", "Scroll to scale");
   }
 
   setVisible(visible) {
@@ -189,6 +193,8 @@ export class PanelOptionsWindow {
   sync({
     saveMode,
     slideshowMode,
+    slideshowShuffle = false,
+    slideshowRepeat = "all",
     tagDefinitions,
     mediaTagIds,
     tagListExpanded,
@@ -212,13 +218,15 @@ export class PanelOptionsWindow {
       this.#rebuild({
         saveMode,
         slideshowMode,
+        slideshowShuffle,
+        slideshowRepeat,
         definitions,
         selectedIds,
         expanded,
         settings,
       });
     }
-    this.#syncSlideshowMode(slideshowMode);
+    this.#syncSlideshowMode(slideshowMode, slideshowShuffle, slideshowRepeat);
     this.#syncDepthValue(depthIntensity);
   }
 
@@ -307,7 +315,10 @@ export class PanelOptionsWindow {
     ));
   }
 
-  #syncSlideshowMode(slideshowMode) {
+  #syncSlideshowMode(slideshowMode, slideshowShuffle = false, slideshowRepeat = "all") {
+    const syncSignature = `${slideshowMode}|${Boolean(slideshowShuffle)}|${slideshowRepeat}`;
+    if (syncSignature === this.slideshowSyncSignature) return;
+    this.slideshowSyncSignature = syncSignature;
     this.slideshowModeRow.replaceChildren(
       this.#makeSectionLabel("Slideshow mode"),
       this.#makeRow(
@@ -316,6 +327,22 @@ export class PanelOptionsWindow {
           label,
           `set-slideshow-mode:${value}`,
           { active: slideshowMode === value },
+        ),
+        { cols: 2 },
+      ),
+      this.#makeRow(
+        [
+          ["Shuffle", "toggle-slideshow-shuffle"],
+          [`Repeat: ${slideshowRepeat === "one" ? "One" : slideshowRepeat === "off" ? "Off" : "All"}`, "cycle-slideshow-repeat"],
+        ],
+        (label, action) => this.#makeButton(
+          label,
+          action,
+          {
+            active: action === "toggle-slideshow-shuffle"
+              ? Boolean(slideshowShuffle)
+              : slideshowRepeat === "one",
+          },
         ),
         { cols: 2 },
       ),

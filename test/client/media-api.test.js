@@ -90,6 +90,54 @@ describe("MediaApi errors", () => {
   });
 });
 
+describe("MediaApi paging and posters", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("passes sort/limit/offset through to directory listings", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ entries: [], total: 0, limit: 2, offset: 4, has_more: false }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetch);
+    vi.stubGlobal("window", { location: { origin: "http://localhost" } });
+
+    await new MediaApi().directory("albums", [], { sort: "mtime", limit: 2, offset: 4 });
+
+    const [url] = fetch.mock.calls[0];
+    const query = new URL(url.toString()).searchParams;
+    expect(query.get("path")).toBe("albums");
+    expect(query.get("sort")).toBe("mtime");
+    expect(query.get("limit")).toBe("2");
+    expect(query.get("offset")).toBe("4");
+  });
+
+  it("appends poster_time to thumbnail URLs only when finite", async () => {
+    vi.stubGlobal("window", { location: { origin: "http://localhost" } });
+    const api = new MediaApi();
+    expect(new URL(api.thumbnailUrl("a/b.mp4", { posterTime: 5 })).searchParams.get("poster_time")).toBe("5");
+    expect(new URL(api.thumbnailUrl("a/b.mp4")).searchParams.get("poster_time")).toBeNull();
+  });
+
+  it("uploadMedia accepts videos and uploadImages stays compatible", async () => {
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response(
+      JSON.stringify({ entries: [{ path: "uploads/clip.mp4" }] }),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    )));
+    vi.stubGlobal("fetch", fetch);
+    const file = new File([new Uint8Array([1, 2, 3])], "clip.mp4", { type: "video/mp4" });
+
+    await expect(new MediaApi().uploadMedia([file])).resolves.toEqual({
+      entries: [{ path: "uploads/clip.mp4" }],
+    });
+    await expect(new MediaApi().uploadImages([file])).resolves.toEqual({
+      entries: [{ path: "uploads/clip.mp4" }],
+    });
+    await expect(new MediaApi().uploadMedia([])).rejects.toMatchObject({ name: "MediaApiError" });
+  });
+});
+
 describe("MediaApi commentary TTS helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();

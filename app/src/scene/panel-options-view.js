@@ -52,6 +52,8 @@ export class PanelOptionsView extends THREE.Group {
   update({
     saveMode,
     slideshowMode,
+    slideshowShuffle = false,
+    slideshowRepeat = "all",
     tagDefinitions,
     mediaTagIds,
     tagListExpanded = true,
@@ -65,6 +67,8 @@ export class PanelOptionsView extends THREE.Group {
     const signature = computeSignature({
       saveMode,
       slideshowMode,
+      slideshowShuffle,
+      slideshowRepeat,
       tagDefinitions: definitions,
       mediaTagIds: selectedIds,
       tagListExpanded: expandedTags,
@@ -91,7 +95,10 @@ export class PanelOptionsView extends THREE.Group {
     addSlideshowModeSection(this.content, widgets, {
       labelY: layout.slideshowLabelY,
       rowY: layout.slideshowRowY,
+      row2Y: layout.slideshowRow2Y,
       slideshowMode,
+      slideshowShuffle,
+      slideshowRepeat,
     });
     addDepthSection(this.content, widgets, {
       labelY: layout.depthLabelY,
@@ -145,6 +152,8 @@ export class PanelOptionsView extends THREE.Group {
     ambientColor,
     ambientIntensity,
     slideshowMode,
+    slideshowShuffle = false,
+    slideshowRepeat = "all",
     depthAvailable,
   }) {
     applyControlStates(this.content, {
@@ -163,6 +172,8 @@ export class PanelOptionsView extends THREE.Group {
       ambientColor,
       ambientIntensity,
       slideshowMode,
+      slideshowShuffle,
+      slideshowRepeat,
       depthAvailable,
     });
   }

@@ -22,6 +22,7 @@ import { DirectoryMenu } from "./directory-menu.js";
 const VIEW_MODES = ["names", "thumbnails", "large"];
 const SORT_MODES = ["name", "mtime", "size", "random"];
 const BROWSER_TEXTURE_RESOLUTION = 4;
+const BROWSER_THUMBNAIL_CACHE_SIZE = 24;
 const UI_FONT = "Inter, system-ui, sans-serif";
 
 function entryTexture(entry) {
@@ -112,6 +113,7 @@ export class MediaBrowserView extends THREE.Group {
     this.page = 0;
     this.selectMode = false;
     this.selectedIds = new Set();
+    this.thumbnailCache = new Map();
     this.position.set(0, 1.35, -1.25);
     this.name = "media-browser";
     this.interactionTarget = {
@@ -316,7 +318,7 @@ export class MediaBrowserView extends THREE.Group {
     this.page = 0;
     this.selectedIds.clear();
     try {
-      const payload = await this.api.directory(next, this.selectedDirectories);
+      const payload = await this.api.directory(next, this.selectedDirectories, { limit: 500 });
       if (generation !== this.navigationGeneration) return;
       const normalized = this.#normalizeEntries(payload);
       this.workingDirectory = next;
@@ -341,7 +343,7 @@ export class MediaBrowserView extends THREE.Group {
     this.page = 0;
     this.selectedIds.clear();
     try {
-      const payload = await this.api.directory(next, this.selectedDirectories);
+      const payload = await this.api.directory(next, this.selectedDirectories, { limit: 500 });
       if (generation !== this.navigationGeneration) return;
       this.path = next;
       this.rawEntries = this.#normalizeEntries(payload)
@@ -470,7 +472,7 @@ export class MediaBrowserView extends THREE.Group {
   }
 
   #renderEntries() {
-    disposeObject(this.content);
+    this.#disposeContentPreservingCache();
     this.remove(this.content);
     this.content = new THREE.Group();
     this.add(this.content);
@@ -553,13 +555,9 @@ export class MediaBrowserView extends THREE.Group {
 
       if (this.viewMode !== "names") {
         card.material.map.dispose();
-        const thumbnail = new THREE.TextureLoader().load(
+        const thumbnail = this.#cachedThumbnail(
           entry.thumbnail_url ?? this.api.thumbnailUrl(entry.path),
-          undefined,
-          undefined,
-          () => {},
         );
-        thumbnail.colorSpace = THREE.SRGBColorSpace;
         card.material.map = thumbnail;
         card.material.needsUpdate = true;
         const label = new THREE.Mesh(
@@ -624,6 +622,72 @@ export class MediaBrowserView extends THREE.Group {
   }
 
   dispose() {
+    this.#disposeContentPreservingCache();
+    for (const texture of this.thumbnailCache.values()) {
+      try {
+        texture.dispose();
+      } catch {
+        // Ignore disposal errors during teardown.
+      }
+    }
+    this.thumbnailCache.clear();
     disposeObject(this);
+  }
+
+  #disposeContentPreservingCache() {
+    const cached = new Set(this.thumbnailCache.values());
+    this.content.traverse((object) => {
+      const materials = Array.isArray(object.material)
+        ? object.material
+        : object.material
+          ? [object.material]
+          : [];
+      for (const material of materials) {
+        if (material.map && cached.has(material.map)) material.map = null;
+      }
+    });
+    disposeObject(this.content);
+  }
+
+  #cachedThumbnail(url) {
+    const cached = this.thumbnailCache.get(url);
+    if (cached) {
+      this.thumbnailCache.delete(url);
+      this.thumbnailCache.set(url, cached);
+      return cached;
+    }
+    const thumbnail = new THREE.TextureLoader().load(url, undefined, undefined, () => {});
+    thumbnail.colorSpace = THREE.SRGBColorSpace;
+    this.thumbnailCache.set(url, thumbnail);
+    while (this.thumbnailCache.size > BROWSER_THUMBNAIL_CACHE_SIZE) {
+      const [oldest, texture] = this.thumbnailCache.entries().next().value;
+      this.thumbnailCache.delete(oldest);
+      if (this.#isTextureInUse(texture)) continue;
+      try {
+        texture.dispose();
+      } catch {
+        // Ignore disposal errors for evicted entries still in use.
+      }
+    }
+    return thumbnail;
+  }
+
+  #isTextureInUse(texture) {
+    let inUse = false;
+    this.content.traverse((object) => {
+      if (inUse) return;
+      const materials = Array.isArray(object.material)
+        ? object.material
+        : object.material
+          ? [object.material]
+          : [];
+      for (const material of materials) {
+        if (material.map === texture) {
+          inUse = true;
+          return;
+        }
+      }
+    });
+    return inUse;
   }
 }
