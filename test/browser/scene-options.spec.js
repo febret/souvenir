@@ -34,6 +34,23 @@ function optionsWindow(page, panelId = null) {
   return page.locator(selector);
 }
 
+function inlineScale(transform) {
+  const match = /scale\(([\d.]+)\)/.exec(String(transform ?? ""));
+  return match ? Number(match[1]) : 1;
+}
+
+async function windowCenter(window) {
+  const center = await window.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  });
+  return center;
+}
+
+async function optionsScale(page, panelId) {
+  return page.evaluate((id) => window.__souvenirApp.panelViews.get(id)?.optionsPanel.scale.x, panelId);
+}
+
 test("shows a 2D options window in desktop preview and hides the in-scene chrome", async ({ page }) => {
   await openDesktopPreview(page);
   const panelId = await firstPanelId(page);
@@ -194,4 +211,69 @@ test("selects persisted tag slideshow mode from panel options", async ({ page })
       .find((panel) => panel.id === id)?.slideshowMode, panelId))
     .toBe("tag");
   await expect(window.locator('[data-action="set-slideshow-mode:tag"]')).toHaveClass(/is-active/);
+});
+
+test("mouse wheel rescales the options window 2D", async ({ page }) => {
+  await openDesktopPreview(page);
+  const panelId = await firstPanelId(page);
+
+  await clickSceneObject(page, { action: "toggle-options", panelId });
+  const window = optionsWindow(page);
+  await expect(window).toBeVisible();
+  expect(inlineScale(await window.evaluate((el) => el.style.transform))).toBe(1);
+
+  const center = await windowCenter(window);
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.wheel(0, -240);
+
+  await expect
+    .poll(async () => inlineScale(await window.evaluate((el) => el.style.transform)))
+    .toBeGreaterThan(1);
+
+  const scaled = inlineScale(await window.evaluate((el) => el.style.transform));
+  await page.mouse.wheel(0, 480);
+
+  await expect
+    .poll(async () => inlineScale(await window.evaluate((el) => el.style.transform)))
+    .toBeLessThan(scaled);
+});
+
+test("scales the in-scene options chrome from a two-hand gesture", async ({ page }) => {
+  await openDesktopPreview(page);
+  const panelId = await firstPanelId(page);
+
+  // Dispatch through the same callback the XR interaction controller uses for
+  // a two-hand pinch on the options backdrop.
+  await page.evaluate((id) => {
+    window.__souvenirApp.panelViews.get(id).optionsPanel.dragTarget.onGesture({
+      hands: 2,
+      scale: 1.5,
+    });
+  }, panelId);
+  await expect.poll(() => optionsScale(page, panelId)).toBe(1.5);
+
+  // A wide pinch clamps to the shared upper bound.
+  await page.evaluate((id) => {
+    window.__souvenirApp.panelViews.get(id).optionsPanel.dragTarget.onGesture({
+      hands: 2,
+      scale: 3,
+    });
+  }, panelId);
+  await expect.poll(() => optionsScale(page, panelId)).toBe(2.2);
+
+  // One-hand drag still translates instead of scaling.
+  await page.evaluate((id) => {
+    const view = window.__souvenirApp.panelViews.get(id);
+    view.optionsPanel.dragTarget.onGesture({
+      hands: 1,
+      translation: { x: 0.1, y: -0.05, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+    });
+  }, panelId);
+  const offset = await page.evaluate((id) => {
+    const view = window.__souvenirApp.panelViews.get(id);
+    return { ...view.optionsOffset };
+  }, panelId);
+  expect(offset.x).toBeCloseTo(0.1);
+  expect(offset.y).toBeCloseTo(-0.05);
 });

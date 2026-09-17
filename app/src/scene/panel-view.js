@@ -23,7 +23,10 @@ import { SpatialSlider } from "./spatial-slider.js";
 import { PanelOptionsView } from "./panel-options-view.js";
 import { PanelOptionsWindow } from "./panel-options-window.js";
 import { createDisplacedPlaneGeometry } from "./depth-surface.js";
-import { ADM_SLIDER_ROW_STEP } from "./panel-options/constants.js";
+import {
+  ADM_SLIDER_ROW_STEP,
+  clampOptionsScale,
+} from "./panel-options/constants.js";
 
 const DOUBLE_TAP_WINDOW_MS = 325;
 const DOUBLE_TAP_MAX_UV_DISTANCE = 0.15;
@@ -345,6 +348,7 @@ export class PanelView extends THREE.Group {
     this.contentLayoutSignature = "";
     this.depthGeometryState = null;
     this.optionsOffset = { x: 0, y: 0 };
+    this.optionsScale = 1;
     this.activeViewCamera = null;
     this.scratchUiWorldPosition = new THREE.Vector3();
     this.scratchUiParentQuaternion = new THREE.Quaternion();
@@ -1485,6 +1489,13 @@ export class PanelView extends THREE.Group {
   }
 
   #handleOptionsDrag(gesture) {
+    if (gesture?.hands === 2) {
+      const scale = Number(gesture.scale);
+      if (!Number.isFinite(scale) || scale <= 0 || scale === 1) return;
+      this.optionsScale = clampOptionsScale(this.optionsScale * scale);
+      this.optionsPanel.scale.setScalar(this.optionsScale);
+      return;
+    }
     if (gesture?.hands !== 1 || !gesture?.translation) return;
     this.optionsOffset.x += Number(gesture.translation.x) || 0;
     this.optionsOffset.y += Number(gesture.translation.y) || 0;

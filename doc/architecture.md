@@ -447,7 +447,11 @@ and the DOM window through the same visibility predicate, so the desktop mode
 keeps the 3D OPTIONS chrome out of the world. Window actions reuse the
 `PanelCoordinator.handleAction` and mask-workflow setting paths. A draggable
 title bar moves the window, and its position is remembered while the preview
-stays open but is not persisted to the layout.
+stays open but is not persisted to the layout. The mouse wheel over the window
+rescales it 2D (`transform: scale`) within shared bounds defined with the 3D
+chrome, and in passthrough a two-hand pinch on the options backdrop emits the
+same incremental `hands: 2`/`scale` gesture media panels use; `PanelView`
+applies it to the options group as a uniform rescale without persisting it.
 
 `app/src/scene/media-browser-view.js:MediaBrowserView` owns bounded directory
 navigation, pagination, view modes, sorting, thumbnail cards, and selection

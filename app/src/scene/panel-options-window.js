@@ -8,6 +8,7 @@ import {
   OPTIONS_ROW,
   SAVE_MODE_DEFINITIONS,
   SLIDESHOW_MODE_DEFINITIONS,
+  clampOptionsScale,
 } from "./panel-options/constants.js";
 
 const BASE_CLASS = "scene-options-window";
@@ -33,6 +34,7 @@ export class PanelOptionsWindow {
     this.signature = "";
     this.controlState = null;
     this.position = null;
+    this.scale = 1;
     this.depthInput = null;
     this.depthOutput = null;
 
@@ -75,6 +77,7 @@ export class PanelOptionsWindow {
 
     if (this.host) this.host.append(root);
     this.#attachDrag();
+    this.#attachResize();
   }
 
   #attachDrag() {
@@ -144,6 +147,20 @@ export class PanelOptionsWindow {
       drag = null;
       handle.releasePointerCapture?.(event.pointerId);
     });
+  }
+
+  #attachResize() {
+    const root = this.element;
+    root.addEventListener(
+      "wheel",
+      (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.scale = clampOptionsScale(this.scale * Math.exp(-event.deltaY * 0.001));
+        root.style.transform = `scale(${this.scale})`;
+      },
+      { passive: false },
+    );
   }
 
   setVisible(visible) {

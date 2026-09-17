@@ -272,6 +272,8 @@ Souvenir needs no controllers:
   scales it at the same time, like holding a physical frame by two corners.
 - On a locked panel, one-hand movement pans its content and a two-hand gesture
   zooms the content instead.
+- Pinch two points on a panel's **OPTIONS** window with both hands to rescale
+  that window without moving it.
 
 For reliable tracking, keep both hands in front of the headset and avoid
 overlapping them.
@@ -524,15 +526,19 @@ Desktop preview is useful for arranging a test layout and checking the server:
 - Drag a panel to move it.
 - Use the mouse wheel over a panel to resize it; when locked or in Zoom mode,
   the wheel zooms its content.
+- Use the mouse wheel over a panel's **OPTIONS** window to rescale that window
+  up or down.
 - Press `Esc` or use the upper-right close button to return home.
 
 In desktop preview each panel's **OPTIONS** (gear) control opens a standard
 2D window instead of the in-scene options panel used on Quest. The window
 appears near the panel, only for the focused panel, and can be dragged by its
 title bar; its position is kept while the preview stays open but is not saved
-with the layout. It offers the same choices as the Quest options panel: save
-mode, depth and lighting controls, and **Tags**. Close it with the **✕**
-button or by focusing the other panel.
+with the layout. Scroll the mouse wheel over the window to rescale it. It offers
+the same choices as the Quest options panel: save mode, depth and lighting
+controls, and **Tags**. Close it with the **✕** button or by focusing the other
+panel. On Quest the window is the in-scene OPTIONS chrome; pinch it with both
+hands to rescale it (a hardware-only check to confirm in passthrough).
 
 Physical passthrough and optical hand tracking can only be validated on Quest.
 

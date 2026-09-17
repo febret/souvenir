@@ -23,6 +23,19 @@ export const ADM_SLIDER_ROW_STEP = ADM_SLIDER_HEIGHT + ADM_SLIDER_ROW_GAP;
 export const TAG_COLUMNS = 3;
 export const SWATCH_SIZE = 0.07;
 
+// Uniform rescale bounds shared by the 3D options chrome and the desktop 2D
+// window. Kept transient (like the desktop window position), not persisted.
+export const OPTIONS_SCALE_MIN = 0.6;
+export const OPTIONS_SCALE_MAX = 2.2;
+
+export function clampOptionsScale(value) {
+  const numeric = Number(value);
+  return Math.min(
+    OPTIONS_SCALE_MAX,
+    Math.max(OPTIONS_SCALE_MIN, Number.isFinite(numeric) ? numeric : 1),
+  );
+}
+
 export const COLOR_SWATCHES = [
   ["white", "#ffffff"],
   ["warm", "#ffd6a0"],
