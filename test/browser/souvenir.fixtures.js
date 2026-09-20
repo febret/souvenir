@@ -1072,19 +1072,15 @@ async function dragSceneObject(page, matcher, localPoint) {
   await page.mouse.up();
 }
 
+async function panelSurfaceScreenPoint(page, panelId, localPoint = null) {
+  const point = await sceneObjectScreenPoint(page, { kind: "panel-surface", panelId }, localPoint);
+  expect(point, "Expected the panel surface point").not.toBeNull();
+  return point;
+}
+
 async function paintAcrossPanelSurface(page, panelId) {
-  const start = await sceneObjectScreenPoint(
-    page,
-    { kind: "panel-surface", panelId },
-    { x: -0.3, y: 0, z: 0 },
-  );
-  const end = await sceneObjectScreenPoint(
-    page,
-    { kind: "panel-surface", panelId },
-    { x: 0.3, y: 0, z: 0 },
-  );
-  expect(start, "Expected the panel surface drawing start point").not.toBeNull();
-  expect(end, "Expected the panel surface drawing end point").not.toBeNull();
+  const start = await panelSurfaceScreenPoint(page, panelId, { x: -0.3, y: 0, z: 0 });
+  const end = await panelSurfaceScreenPoint(page, panelId, { x: 0.3, y: 0, z: 0 });
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(end.x, end.y, { steps: 12 });
@@ -1190,6 +1186,7 @@ export {
   clickSceneObject,
   doubleTapSceneObject,
   sceneObjectScreenPoint,
+  panelSurfaceScreenPoint,
   dragSceneObject,
   paintAcrossPanelSurface,
   selectBeachImage,

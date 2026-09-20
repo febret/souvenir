@@ -145,7 +145,7 @@ export class SpatialApp {
       canvas: this.canvas,
       onActivate: (hit, context) => this.#activate(hit, context),
       onGesture: (target, gesture) => this.panelCoordinator.applyGesture(target, gesture),
-      onFocus: (target) => this.panelCoordinator.focus(target),
+      onBackgroundActivate: () => this.panelCoordinator.unfocus(),
     });
 
     this.controls = new OrbitControls(this.camera, this.canvas);
@@ -350,6 +350,9 @@ export class SpatialApp {
       return;
     }
     if (kind === "panel-surface" || kind === "panel-frame") {
+      // Tap/click is the only path that selects a panel. Hovering, pressing,
+      // dragging, wheeling, or grabbing never changes selection.
+      this.panelCoordinator.focus(panelId);
       this.panelViews.get(panelId)?.activateSurface(uv, context);
     }
   }

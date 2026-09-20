@@ -21,6 +21,27 @@ function resolvedLimits(limits) {
   };
 }
 
+/**
+ * Derives a two-hand scale-factor range from the live panel size so the
+ * clamped factor keeps absolute dimensions within the shared bounds.
+ * Returns a locked range when the size is invalid or uniform scaling cannot
+ * satisfy both bounds at once.
+ */
+export function scaleLimitsForDimensions(dimensions) {
+  const width = dimensions?.width;
+  const height = dimensions?.height;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return { min: 1, max: 1 };
+  }
+  const bound = resolvedLimits().dimensions;
+  const min = Math.max(bound.minWidth / width, bound.minHeight / height);
+  const max = Math.min(bound.maxWidth / width, bound.maxHeight / height);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) {
+    return { min: 1, max: 1 };
+  }
+  return { min, max };
+}
+
 export function createInteractionState({ panelId = null, hands = 0 } = {}) {
   return { panelId, hands: clamp(Math.trunc(numeric(hands)), 0, 2) };
 }

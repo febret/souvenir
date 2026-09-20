@@ -4,6 +4,7 @@ import {
   normalizeCrop,
   timeLabel,
 } from "../core/audio-crop.js";
+import { normalizeCommentaryTuning, normalizeCommentaryVoice } from "../core/settings.js";
 import { createTagPill } from "./tag-pill.js";
 
 export const COMMENTARY_TTS_POLL_INTERVAL_MS = 700;
@@ -22,6 +23,8 @@ export class CommentaryAddDialog {
     elements,
     getTags = () => [],
     getAvailability = () => ({ loading: false, error: "", available: false }),
+    getTtsPrefs = () => ({}),
+    setTtsPrefs = () => {},
     onSaved = () => {},
     onError = () => {},
   } = {}) {
@@ -30,6 +33,8 @@ export class CommentaryAddDialog {
     this.elements = elements;
     this.getTags = getTags;
     this.getAvailability = getAvailability;
+    this.getTtsPrefs = getTtsPrefs;
+    this.setTtsPrefs = setTtsPrefs;
     this.onSaved = onSaved;
     this.onError = onError;
 
@@ -39,9 +44,10 @@ export class CommentaryAddDialog {
     this.voiceFilter = "";
     this._voiceOptionsSignature = null;
     this.text = "";
-    this.voice = "";
-    this.pitch = 0;
-    this.rate = 0;
+    const initialPrefs = this.readTtsPrefs();
+    this.voice = initialPrefs.voice;
+    this.pitch = initialPrefs.pitch;
+    this.rate = initialPrefs.rate;
     this.error = "";
     this.requestId = null;
     this.ttsUrl = null;
@@ -116,6 +122,7 @@ export class CommentaryAddDialog {
     });
     el.commentaryAddVoice.addEventListener("change", () => {
       this.voice = el.commentaryAddVoice.value;
+      this.persistTtsPrefs();
       this.render();
     });
     el.commentaryAddVoiceFilter.addEventListener("input", () => {
@@ -126,6 +133,13 @@ export class CommentaryAddDialog {
     const bindTuning = (slider, apply) => {
       slider.addEventListener("input", () => {
         apply(Number(slider.value));
+        this.render();
+      });
+      // Persisting writes settings to storage; do it once per drag instead of
+      // on every input tick.
+      slider.addEventListener("change", () => {
+        apply(Number(slider.value));
+        this.persistTtsPrefs();
         this.render();
       });
     };
@@ -200,11 +214,12 @@ export class CommentaryAddDialog {
     this.stopPreview();
     this.text = "";
     this.voiceFilter = "";
-    this.voice = "";
+    const prefs = this.readTtsPrefs();
+    this.voice = prefs.voice;
+    this.pitch = prefs.pitch;
+    this.rate = prefs.rate;
     this._voiceOptionsSignature = null;
     this.reconcileVoiceSelection();
-    this.pitch = 0;
-    this.rate = 0;
     this.error = "";
     this.requestId = null;
     this.ttsUrl = null;
@@ -280,6 +295,30 @@ export class CommentaryAddDialog {
     const visible = this.filteredVoices();
     if (!visible.some((voice) => voice.id === this.voice)) {
       this.voice = visible[0]?.id ?? "";
+    }
+  }
+
+  readTtsPrefs() {
+    const fallback = { voice: "", pitch: 0, rate: 0 };
+    let prefs;
+    try {
+      prefs = this.getTtsPrefs?.() ?? {};
+    } catch {
+      return { ...fallback };
+    }
+    if (!prefs || typeof prefs !== "object") return { ...fallback };
+    return {
+      voice: normalizeCommentaryVoice(prefs.voice),
+      pitch: normalizeCommentaryTuning(prefs.pitch, "commentaryPitch"),
+      rate: normalizeCommentaryTuning(prefs.rate, "commentaryRate"),
+    };
+  }
+
+  persistTtsPrefs() {
+    try {
+      this.setTtsPrefs?.({ voice: this.voice, pitch: this.pitch, rate: this.rate });
+    } catch {
+      // Persistence is best-effort; dialog state already reflects the selection.
     }
   }
 

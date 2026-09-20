@@ -1,6 +1,7 @@
 import * as THREE from "three";
 
 import { mediaDisplayLayout } from "../core/media-display.js";
+import { scaleLimitsForDimensions } from "../core/gestures.js";
 import {
   disposeObject,
   markInteractive,
@@ -907,21 +908,11 @@ export class PanelView extends THREE.Group {
     }
     this.userData.locked = Boolean(panel.locked || this.zenMode);
     this.userData.minimized = minimized;
-    const normalDimensions = panel.restoreDimensions ?? panel.dimensions ?? { width, height };
-    const scaleLimits = minimized
-      ? { min: 1, max: 1 }
-      : {
-        min: Math.max(0.2 / normalDimensions.width, 0.15 / normalDimensions.height),
-        max: Math.min(5 / normalDimensions.width, 5 / normalDimensions.height),
-      };
+    const scaleLimits = minimized ? { min: 1, max: 1 } : scaleLimitsForDimensions({ width, height });
     this.userData.manipulation = {
       type: "panel",
       scalable: !minimized && !this.userData.locked,
       dimensions: { width, height },
-      initialDimensions: {
-        width: normalDimensions.width,
-        height: normalDimensions.height,
-      },
       scaleLimits,
     };
 
@@ -1133,6 +1124,16 @@ export class PanelView extends THREE.Group {
     this.#refreshOptionsPanel();
     this.#updateControlStates();
     return this.tagListExpanded;
+  }
+
+  closeOptions() {
+    if (!this.optionsOpen) {
+      this.#applyOptionsVisibility();
+      return;
+    }
+    this.optionsOpen = false;
+    this.#updateControlStates();
+    this.#applyOptionsVisibility();
   }
 
   getMediaDimensions() {

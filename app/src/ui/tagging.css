@@ -7,6 +7,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  height: 100dvh;
   background:
     radial-gradient(ellipse at 60% 0%, rgba(56, 110, 91, 0.28) 0%, transparent 55%),
     radial-gradient(ellipse at 20% 100%, rgba(40, 80, 120, 0.18) 0%, transparent 50%),
@@ -73,6 +74,7 @@
   padding: 14px 20px 10px;
   border-bottom: 1px solid rgba(190, 221, 209, 0.1);
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .tagging-exit {
@@ -83,6 +85,8 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .tagging-kicker {
@@ -99,6 +103,9 @@
   margin: 0;
   letter-spacing: -0.02em;
   color: #e8f5ef;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tagging-session-hud {
@@ -202,6 +209,7 @@
   display: grid;
   grid-template-columns: repeat(9, minmax(0, 1fr));
   gap: 8px;
+  min-width: 0;
 }
 
 .tagging-stat-card {
@@ -214,6 +222,8 @@
   flex-direction: column;
   gap: 4px;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .tagging-stat-card span {
@@ -228,6 +238,9 @@
   font-size: 0.88rem;
   font-weight: 760;
   letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tagging-stat-card--commentary {
@@ -368,13 +381,14 @@
 
 .tagging-tag-bar {
   display: flex;
-  align-items: center;
-  gap: 16px;
+  align-items: stretch;
+  gap: 12px;
   padding: 14px 20px 10px;
   background:
     linear-gradient(180deg, rgba(4, 10, 12, 0.4), rgba(0, 0, 0, 0.22));
   border-bottom: 1px solid rgba(190, 221, 209, 0.07);
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .tagging-tag-info {
@@ -419,7 +433,7 @@
 }
 
 .tagging-tag-label {
-  font-size: 1.55rem;
+  font-size: clamp(1.05rem, 4.5vw, 1.55rem);
   font-weight: 750;
   letter-spacing: -0.03em;
   color: #f3f7f4;
@@ -454,8 +468,10 @@
 
 .tagging-next-btn {
   flex-shrink: 0;
+  align-self: center;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
   padding: 10px 20px;
   border: none;
@@ -489,11 +505,13 @@
 
 .tagging-grid-area {
   flex: 1;
-  overflow: hidden;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
   padding: 16px 20px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
 }
 
 .tagging-hint {
@@ -506,10 +524,12 @@
 .tagging-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  grid-template-rows: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
   gap: 10px;
   overflow: hidden;
+  min-height: 0;
+  min-width: 0;
 }
 
 /* ─── Grid cell ──────────────────────────────────────────────────────── */
@@ -521,6 +541,8 @@
   cursor: pointer;
   border: 2px solid transparent;
   background: rgba(255, 255, 255, 0.04);
+  min-width: 0;
+  min-height: 0;
   transition:
     border-color 0.22s,
     box-shadow 0.22s,
@@ -913,39 +935,151 @@
   gap: 8px;
 }
 
-/* Compact 2D window styling */
-.tagging-header,
-.tagging-session-hud,
-.tagging-remaining-panel,
-.tagging-stat-card,
-.tagging-workspace,
-.tagging-media-grid,
-.tagging-exit-summary,
-.tagging-exit-summary-card {
-  padding: 4px !important;
+/* ─── Responsive ─────────────────────────────────────────────────────── */
+
+@media (max-width: 1100px) {
+  .tagging-session-hud {
+    grid-template-columns: minmax(200px, 0.9fr) 1.6fr;
+  }
+
+  .tagging-stats {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
 }
 
-.tagging-header,
-.tagging-session-hud,
-.tagging-stats,
-.tagging-exit-summary-actions {
-  gap: 4px !important;
+@media (max-width: 860px) {
+  .tagging-session-hud {
+    grid-template-columns: 1fr;
+  }
+
+  .tagging-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
-.tagging-title,
-.tagging-final-score,
-.tagging-final-records {
-  margin: 0 !important;
+@media (max-width: 640px) {
+  .tagging-header {
+    gap: 10px;
+    padding: 10px 12px 8px;
+  }
+
+  .tagging-kicker {
+    font-size: 0.58rem;
+  }
+
+  .tagging-title {
+    font-size: 0.95rem;
+  }
+
+  .tagging-session-hud {
+    gap: 8px;
+    padding: 8px 12px 6px;
+  }
+
+  .tagging-remaining-panel {
+    padding: 10px 12px;
+    border-radius: 12px;
+  }
+
+  .tagging-remaining-text {
+    margin-bottom: 8px;
+    font-size: 0.76rem;
+  }
+
+  .tagging-remaining-track {
+    height: 14px;
+  }
+
+  .tagging-stats {
+    gap: 6px;
+  }
+
+  .tagging-stat-card {
+    padding: 6px 8px;
+    border-radius: 10px;
+  }
+
+  .tagging-stat-card span {
+    font-size: 0.58rem;
+  }
+
+  .tagging-stat-card strong {
+    font-size: 0.78rem;
+  }
+
+  .tagging-tag-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px 8px;
+  }
+
+  .tagging-tag-info {
+    flex: 1 1 100%;
+    padding: 8px 12px;
+  }
+
+  .tagging-next-btn {
+    flex: 1 1 100%;
+    min-height: 44px;
+    padding: 12px 16px;
+  }
+
+  .tagging-grid-area {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .tagging-grid {
+    gap: 8px;
+  }
+
+  .tagging-status {
+    padding: 4px 12px 8px;
+  }
+
+  .tagging-exit-summary {
+    padding: 12px;
+  }
+
+  .tagging-exit-summary-card {
+    padding: 16px;
+  }
+
+  .tagging-exit-summary-actions {
+    flex-wrap: wrap;
+  }
+
+  .tagging-exit-summary-actions > * {
+    flex: 1 1 140px;
+  }
 }
 
-.tagging-header .secondary-button,
-.tagging-header .primary-button,
-.tagging-workspace .secondary-button,
-.tagging-workspace .primary-button,
-.tagging-exit-summary-actions .secondary-button,
-.tagging-exit-summary-actions .primary-button {
-  min-height: 40px;
-  padding: 0 4px !important;
-  font-size: 1rem !important;
-  line-height: 1.05;
+/* ─── Portrait: keep the 3x3 grid readable and scroll the area ────────── */
+
+@media (orientation: portrait) {
+  .tagging-grid {
+    /* Size to content instead of shrinking into leftover flex space, so
+       every row keeps a usable height; .tagging-grid-area scrolls instead. */
+    flex: 0 0 auto;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-auto-rows: minmax(200px, 1fr);
+    overflow: visible;
+    align-content: start;
+  }
+}
+
+@media (max-width: 380px) {
+  .tagging-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tagging-stat-card--score {
+    grid-column: span 2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tagging-media--image {
+    animation: none;
+  }
 }

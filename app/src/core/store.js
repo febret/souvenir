@@ -17,6 +17,7 @@ export class PanelStore {
   add(overrides) { return this.#store.add(overrides); }
   remove(id) { return this.#store.remove(id); }
   focus(id) { return this.#store.focus(id); }
+  unfocus() { return this.#store.unfocus(); }
   setMedia(id, selectedId) { return this.#store.setMedia(id, selectedId); }
   setMediaContext(id, context) { return this.#store.setMediaContext(id, context); }
   setMediaPose(id, mediaKey, pose) {

@@ -222,7 +222,8 @@ export class PanelCoordinator {
       view.setSlideshowTags({
         definitions: this.slideshowTagDefinitions(selected, panel.slideshowTagIds),
         selectedTagIds: panel.slideshowTagIds,
-        visible: runtime.slideshow.active && panel.slideshowMode === "tag",
+        visible: runtime.slideshow.active && panel.slideshowMode === "tag"
+          && state.focusedId === panel.id,
       });
       if (runtime.slideshow.active && panel.slideshowMode === "tag"
         && panel.slideshowTagIds.length && !Array.isArray(runtime.tagPlaylist)) {
@@ -245,6 +246,9 @@ export class PanelCoordinator {
       }
     }
     if (structural || change?.focusChanged) {
+      for (const [panelId, view] of this.panelViews) {
+        if (panelId !== state.focusedId) view.closeOptions?.();
+      }
       this.onPanelsChanged?.(panelEntries, state.focusedId);
     }
     this.scheduleSave();
@@ -665,6 +669,10 @@ export class PanelCoordinator {
 
   focus(target) {
     if (typeof target === "string") this.store.focus(target);
+  }
+
+  unfocus() {
+    this.store.unfocus();
   }
 
   applyGesture(target, gesture) {

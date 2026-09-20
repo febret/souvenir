@@ -298,6 +298,17 @@ export function createPanelStore({ panels = [], focusedId = null, media, idFacto
       });
       return true;
     },
+    unfocus() {
+      if (state.focusedId == null) return true;
+      const previousFocusedId = state.focusedId;
+      state.focusedId = null;
+      emit({
+        type: "focus",
+        panelIds: [previousFocusedId],
+        focusChanged: true,
+      });
+      return true;
+    },
     setMedia(id, selectedId) {
       const current = state.panels.find((panel) => panel.id === id);
       if (!current) return null;

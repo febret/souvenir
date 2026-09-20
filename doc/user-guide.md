@@ -166,8 +166,10 @@ The home screen includes these panels:
    Each compact sound row also has a **Volume** slider. Its saved 0–100% level is
    applied both to portal test playback and automatic AR commentary, which lets
    you reduce louder recordings to match quieter source recordings.
-   Choose **Add commentary** to type a line (up to 2000 characters), pick a
-   voice, adjust pitch (±Hz) and rate (±%), then **Generate preview**. Use the
+    Choose **Add commentary** to type a line (up to 2000 characters), pick a
+    voice, adjust pitch (±Hz) and rate (±%), then **Generate preview**. The panel
+    remembers the last selected voice, pitch, and rate and restores them the next
+    time it opens. Use the
    **Filter voices** box above the voice list to narrow it by name, locale, or
    gender when the catalog is large. Press
    **Replay** to listen — previews never autoplay, since browsers require a
@@ -345,7 +347,16 @@ clock, so pausing or delayed playback cannot make the text drift. The caption
 card stays at the configured distance directly in front of the current desktop
 camera or Quest headset and continuously faces the viewer.
 
-Each focused full panel has a set of controls along its top:
+Pointing the hand ray (or mouse pointer) at a panel never selects it.
+A panel is selected only by pointing at it and pinching/clicking it
+(a tap without dragging). Exactly one panel is selected at a time: the
+selected panel shows its top controls, and tapping a different media panel
+moves the selection there and fully closes the previous panel's controls,
+tag list, and configuration window. Tapping empty space deselects
+everything, leaving no panel controls visible. Dragging a panel to move it
+or resizing it with the mouse wheel never changes the selection by itself.
+
+Each selected full panel has a set of controls along its top:
 
 - **Media** opens the media browser.
 - **Lock** freezes position, orientation, and panel size. Hand movement now pans
@@ -540,13 +551,14 @@ Desktop preview is useful for arranging a test layout and checking the server:
 
 In desktop preview each panel's **OPTIONS** (gear) control opens a standard
 2D window instead of the in-scene options panel used on Quest. The window
-appears near the panel, only for the focused panel, and can be dragged by its
+appears near the panel, only for the selected panel, and can be dragged by its
 title bar; its position is kept while the preview stays open but is not saved
 with the layout. Scroll the mouse wheel over the title bar to rescale it; the
 wheel still scrolls the tag list below it. It offers
 the same choices as the Quest options panel: save mode, depth and lighting
-controls, and **Tags**. Close it with the **✕** button or by focusing the other
-panel. On Quest the window is the in-scene OPTIONS chrome; pinch it with both
+controls, and **Tags**. Close it with the **✕** button or by tapping another
+panel (which fully closes it, so it must be reopened with the gear).
+On Quest the window is the in-scene OPTIONS chrome; pinch it with both
 hands to rescale it (a hardware-only check to confirm in passthrough).
 
 Physical passthrough and optical hand tracking can only be validated on Quest.

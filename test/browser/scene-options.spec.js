@@ -3,6 +3,7 @@ import {
   DEPTH_PNG,
   clickSceneObject,
   mockServer,
+  panelSurfaceScreenPoint,
   selectBeachImage,
 } from "./souvenir.fixtures.js";
 
@@ -88,8 +89,9 @@ test("tracks the focused panel: closing hides it, and another panel shows its ow
     position: { x: 0.1, y: 1.35, z: -1.45 },
     rotation: { x: 0, y: 0, z: 0 },
   }), second);
-  // Unfocused panels hide their controls, so focus a panel before clicking its
-  // gear (the same interaction as pointing at it in XR).
+  // Unfocused panels hide their controls, so select a panel before clicking
+  // its gear. In the app this happens through the same tap (the gear action
+  // focuses its panel); the helper makes the setup step explicit.
   async function focusPanel(panelId) {
     await page.evaluate((id) => window.__souvenirApp.store.focus(id), panelId);
     await expect
@@ -246,6 +248,56 @@ test("mouse wheel over the title bar rescales the options window 2D", async ({ p
   await expect
     .poll(async () => inlineScale(await window.evaluate((el) => el.style.transform)))
     .toBeLessThan(beforeBody);
+});
+
+test("hover never selects: only a tap moves the toolbar and options", async ({ page }) => {
+  await openDesktopPreview(page);
+  const first = await firstPanelId(page);
+  await clickSceneObject(page, { action: "add-panel" });
+  await expect
+    .poll(() => page.evaluate(() => window.__souvenirApp.panelState.panels.length))
+    .toBe(2);
+  const second = await page.evaluate(() => window.__souvenirApp.panelState.panels[1].id);
+  // The clone lands on top of the first panel; separate them so the ray hits
+  // exactly one surface. The new panel starts selected, so its gear is the
+  // visible one.
+  await page.evaluate((id) => window.__souvenirApp.store.setTransform(id, {
+    position: { x: -0.9, y: 1.35, z: -1.45 },
+    rotation: { x: 0, y: 0, z: 0 },
+  }), first);
+
+  await clickSceneObject(page, { action: "toggle-options", panelId: second });
+  const windowB = optionsWindow(page, second);
+  await expect(windowB).toBeVisible();
+
+  const surfacePoint = await panelSurfaceScreenPoint(page, first);
+
+  // Hover without clicking: selection, toolbar, and options must not move.
+  await page.mouse.move(surfacePoint.x, surfacePoint.y);
+  await page.waitForTimeout(250);
+  await expect
+    .poll(() => page.evaluate(() => window.__souvenirApp.panelState.focusedId))
+    .toBe(second);
+  await expect(windowB).toBeVisible();
+  await expect
+    .poll(() => page.evaluate((id) => window.__souvenirApp.panelViews.get(id)?.controls.visible, first))
+    .toBe(false);
+
+  // A real tap on the other panel selects it and fully closes the old window.
+  await page.mouse.click(surfacePoint.x, surfacePoint.y);
+  await expect
+    .poll(() => page.evaluate(() => window.__souvenirApp.panelState.focusedId), { timeout: 5000 })
+    .toBe(first);
+  await expect(windowB).toBeHidden();
+  await expect
+    .poll(() => page.evaluate((id) => window.__souvenirApp.panelViews.get(id)?.optionsOpen, second))
+    .toBe(false);
+  await expect
+    .poll(() => page.evaluate((id) => window.__souvenirApp.panelViews.get(id)?.controls.visible, first))
+    .toBe(true);
+  await expect
+    .poll(() => page.evaluate((id) => window.__souvenirApp.panelViews.get(id)?.controls.visible, second))
+    .toBe(false);
 });
 
 test("scales the in-scene options chrome from a two-hand gesture", async ({ page }) => {

@@ -1,6 +1,8 @@
 import {
   DEFAULT_SETTINGS,
   loadSettings,
+  normalizeCommentaryTuning,
+  normalizeCommentaryVoice,
   normalizePowerOfTwoResolution,
   reconcileSelectedDirectories,
   saveSettings,
@@ -287,6 +289,12 @@ export class HomeController {
         error: this.commentaryError,
         available: this.commentaryAvailable,
       }),
+      getTtsPrefs: () => ({
+        voice: this.settings.commentaryVoice,
+        pitch: this.settings.commentaryPitch,
+        rate: this.settings.commentaryRate,
+      }),
+      setTtsPrefs: (prefs) => this.#saveCommentaryTtsPrefs(prefs),
       onSaved: () => this.#loadCommentary(),
       onError: (error) => this.#showError(error),
     });
@@ -1997,6 +2005,19 @@ export class HomeController {
 
   #persist() {
     this.settings = saveSettings(this.storage, this.settings);
+  }
+
+  #saveCommentaryTtsPrefs(prefs) {
+    if (!prefs || typeof prefs !== "object") return;
+    if (typeof prefs.voice === "string") {
+      this.settings.commentaryVoice = normalizeCommentaryVoice(prefs.voice);
+    }
+    for (const [key, prefKey] of [["commentaryPitch", "pitch"], ["commentaryRate", "rate"]]) {
+      if (Number.isFinite(prefs[prefKey])) {
+        this.settings[key] = normalizeCommentaryTuning(prefs[prefKey], key);
+      }
+    }
+    this.#persist();
   }
 
   #canonicalDirectoryPaths(paths) {

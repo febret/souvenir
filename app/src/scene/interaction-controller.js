@@ -1,6 +1,7 @@
 import * as THREE from "three";
 
 import { createRayDragState, solveRayDragPose } from "../core/ray-drag.js";
+import { scaleLimitsForDimensions } from "../core/gestures.js";
 import {
   createTwoHandRayDragState,
   solveTwoHandRayDragPose,
@@ -25,8 +26,11 @@ function setXrControllerRay(raycaster, controller) {
   return true;
 }
 
+// Pointer travel (px) beyond which a press counts as a drag instead of a tap.
+const TAP_SLOP_PX = 5;
+
 export class InteractionController {
-  constructor({ renderer, camera, scene, overlayScene, canvas, onActivate, onGesture, onFocus }) {
+  constructor({ renderer, camera, scene, overlayScene, canvas, onActivate, onGesture, onBackgroundActivate }) {
     this.renderer = renderer;
     this.camera = camera;
     this.scene = scene;
@@ -34,7 +38,7 @@ export class InteractionController {
     this.canvas = canvas;
     this.onActivate = onActivate;
     this.onGesture = onGesture;
-    this.onFocus = onFocus;
+    this.onBackgroundActivate = onBackgroundActivate;
     this.raycaster = new THREE.Raycaster();
     // Only meshes that opt into the shared interaction layer run geometry
     // raycasts; recursive traversal can then safely include the whole scene.
@@ -42,13 +46,16 @@ export class InteractionController {
     this.pointer = new THREE.Vector2();
     this.desktopDrag = null;
     this.xrGrabs = new Map();
+    // Background pinches are tracked separately from content grabs: update()
+    // assumes every xrGrabs entry carries drag state, so an empty press must
+    // never enter that map (it threw every frame while held, freezing XR).
+    this.xrEmptyPress = new Map();
     this.xrControllers = [];
     this.xrControllerPoses = [];
     this.xrHands = [];
     this.xrRays = [];
     this.xrListeners = [];
     this.xrRayGeometry = null;
-    this.lastFocusedTarget = null;
     this.hoveredDrawTarget = null;
     this.nextGestureId = 1;
     this.scratchQuaternion = new THREE.Quaternion();
@@ -64,7 +71,20 @@ export class InteractionController {
   #bindDesktop() {
     this.onPointerDown = (event) => {
       const hit = this.#desktopHit(event);
-      if (!hit) return;
+      // Hovering or pressing without a tap never selects: empty presses are
+      // tracked only so a clean click on background can deselect, while orbit
+      // controls keep receiving the event.
+      if (!hit) {
+        this.desktopDrag = {
+          hit: null,
+          target: null,
+          empty: true,
+          start: new THREE.Vector2(event.clientX, event.clientY),
+          last: new THREE.Vector2(event.clientX, event.clientY),
+          moved: false,
+        };
+        return;
+      }
       event.stopImmediatePropagation();
       const drawTarget = this.#drawTarget(hit);
       if (drawTarget) {
@@ -74,7 +94,6 @@ export class InteractionController {
         return;
       }
       const target = this.#gestureTarget(hit);
-      if (target) this.#focus(target);
       this.desktopDrag = {
         hit,
         target,
@@ -86,10 +105,13 @@ export class InteractionController {
     };
     this.onPointerMove = (event) => {
       if (!this.desktopDrag) {
-        const hit = this.#desktopHit(event);
-        this.#updateDrawHover(hit);
-        const target = this.#gestureTarget(hit);
-        if (target) this.#focus(target);
+        // Hover is inert for selection; only mask-brush hover feedback runs.
+        this.#updateDrawHover(this.#desktopHit(event));
+        return;
+      }
+      if (this.desktopDrag.empty) {
+        // Empty presses only track tap-vs-orbit-drag; OrbitControls keeps the event.
+        this.#updatePressPosition(this.desktopDrag, event.clientX, event.clientY);
         return;
       }
       event.stopImmediatePropagation();
@@ -105,12 +127,7 @@ export class InteractionController {
         }
         return;
       }
-      const current = new THREE.Vector2(event.clientX, event.clientY);
-      const delta = current.clone().sub(this.desktopDrag.last);
-      this.desktopDrag.last.copy(current);
-      if (current.distanceTo(this.desktopDrag.start) > 5) {
-        this.desktopDrag.moved = true;
-      }
+      const delta = this.#updatePressPosition(this.desktopDrag, event.clientX, event.clientY);
       if (this.desktopDrag.moved && this.desktopDrag.target) {
         this.onGesture?.(this.desktopDrag.target, {
           hands: 1,
@@ -124,6 +141,12 @@ export class InteractionController {
     };
     this.onPointerUp = (event) => {
       if (!this.desktopDrag) return;
+      if (this.desktopDrag.empty) {
+        const wasTap = !this.desktopDrag.moved;
+        this.desktopDrag = null;
+        if (wasTap) this.onBackgroundActivate?.({ source: "desktop-pointer" });
+        return;
+      }
       event.stopImmediatePropagation();
       if (this.desktopDrag.drawing) {
         this.#draw(this.desktopDrag.drawTarget, "end", this.desktopDrag.lastHit);
@@ -142,7 +165,7 @@ export class InteractionController {
       if (!target) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      this.#focus(target);
+      // Resizing via wheel acts without selecting; selection is tap-only.
       this.onGesture?.(target, {
         hands: 2,
         scale: Math.exp(-event.deltaY * 0.001),
@@ -188,6 +211,14 @@ export class InteractionController {
     }
   }
 
+  #updatePressPosition(drag, clientX, clientY) {
+    const current = new THREE.Vector2(clientX, clientY);
+    const delta = current.clone().sub(drag.last);
+    drag.last.copy(current);
+    if (current.distanceTo(drag.start) > TAP_SLOP_PX) drag.moved = true;
+    return delta;
+  }
+
   #desktopHit(event) {
     const rect = this.canvas.getBoundingClientRect();
     this.pointer.set(
@@ -203,7 +234,16 @@ export class InteractionController {
     const ray = snapshotXrControllerRay(this.raycaster, controller);
     if (!ray) return;
     const hit = this.#firstInteractiveHit();
-    if (!hit) return;
+    // Pinching empty space never selects; the tap is tracked separately from
+    // content grabs so the per-frame gesture solver never sees it.
+    if (!hit) {
+      const { position, quaternion } = this.#sampleControllerPose(index);
+      this.xrEmptyPress.set(index, {
+        startPosition: position.clone(),
+        startQuaternion: quaternion.clone(),
+      });
+      return;
+    }
     const drawTarget = this.#drawTarget(hit);
     if (drawTarget) {
       this.#draw(drawTarget, "start", hit);
@@ -216,7 +256,8 @@ export class InteractionController {
       this.onActivate?.(hit, { source: "xr-select-start" });
       return;
     }
-    this.#focus(target);
+    // Selection happens on tap release (xr-select), not on grab start, so
+    // dragging a panel never changes selection by itself.
     const { position, quaternion } = this.#sampleControllerPose(index);
     const rayDrag = this.#canRayDrag(target, root)
       ? this.#captureRayDrag(hit, root, quaternion, ray)
@@ -236,6 +277,21 @@ export class InteractionController {
   }
 
   #xrSelectEnd(index) {
+    const emptyPress = this.xrEmptyPress.get(index);
+    if (emptyPress) {
+      const controller = this.xrControllers[index];
+      this.xrEmptyPress.delete(index);
+      if (!controller) return;
+      const { position, quaternion } = this.#sampleControllerPose(index);
+      const moved = emptyPress.startPosition.distanceTo(position) > 0.015
+        || 1 - Math.abs(emptyPress.startQuaternion.dot(quaternion)) > 0.0001;
+      if (moved) return;
+      // A hand holding content (or drawing) wins over background: only
+      // deselect when no other hand is grabbing something.
+      if (this.xrGrabs.size > 0) return;
+      this.onBackgroundActivate?.({ source: "xr-select" });
+      return;
+    }
     const grab = this.xrGrabs.get(index);
     if (!grab) return;
     if (grab.drawing) {
@@ -261,22 +317,15 @@ export class InteractionController {
   update() {
     if (!this.renderer.xr.isPresenting) return;
     if (this.xrGrabs.size === 0) {
-      let hovered = false;
       for (const controller of this.xrControllers) {
         if (!setXrControllerRay(this.raycaster, controller)) continue;
         const hit = this.#firstInteractiveHit();
         if (this.#drawTarget(hit)) {
           this.#updateDrawHover(hit);
-          hovered = true;
-          break;
-        }
-        const target = this.#gestureTarget(hit);
-        if (target) {
-          this.#focus(target);
-          break;
+          return;
         }
       }
-      if (!hovered) this.#updateDrawHover(null);
+      this.#updateDrawHover(null);
       return;
     }
     let hasDrawingGrab = false;
@@ -496,16 +545,19 @@ export class InteractionController {
     if (firstHit.point.distanceToSquared(secondHit.point) <= Number.EPSILON) return;
     const state = this.#captureTwoHandState(first.root, firstHit, secondHit);
     const manipulation = first.root.userData.manipulation ?? {};
+    const dimensions = manipulation.dimensions
+      && Number.isFinite(manipulation.dimensions.width)
+      && Number.isFinite(manipulation.dimensions.height)
+      ? { ...manipulation.dimensions }
+      : null;
     const pair = {
       state,
       firstIndex,
       secondIndex,
       gestureId: `two-ray-${this.nextGestureId++}`,
-      initialDimensions: manipulation.initialDimensions
-        ? { ...manipulation.initialDimensions }
-        : manipulation.dimensions
-          ? { ...manipulation.dimensions }
-          : null,
+      // The scale base is the live size at gesture start; a stale base
+      // snapped panels on the first frame (scaleFactor ~= 1).
+      initialDimensions: dimensions,
     };
     first.twoHand = pair;
     second.twoHand = pair;
@@ -557,11 +609,20 @@ export class InteractionController {
       targetPosition: position,
       targetQuaternion: quaternion,
       targetScale: scale,
-      scaleLimits: this.#twoHandScaleLimits(manipulation, scale),
+      scaleLimits: this.#twoHandScaleLimits(manipulation, scale, {
+        minimized: Boolean(root.userData.minimized),
+      }),
     });
   }
 
-  #twoHandScaleLimits(manipulation, targetScale) {
+  #twoHandScaleLimits(manipulation, targetScale, { minimized = false } = {}) {
+    if (manipulation?.type === "panel") {
+      if (minimized) return { min: 1, max: 1 };
+      // Derive limits from the live size so the clamped scaleFactor keeps
+      // absolute dimensions within bounds. restoreDimensions-derived limits
+      // would mis-clamp the first frames.
+      return scaleLimitsForDimensions(manipulation.dimensions);
+    }
     const limits = manipulation.scaleLimits ?? { min: 1, max: 1 };
     if (manipulation.type !== "browser" && manipulation.type !== "toolbar") return limits;
     const current = Math.abs(targetScale.x);
@@ -664,12 +725,6 @@ export class InteractionController {
     return Number.isFinite(divisor) && divisor > Number.EPSILON ? value / divisor : value;
   }
 
-  #focus(target) {
-    if (target === this.lastFocusedTarget) return;
-    this.lastFocusedTarget = target;
-    this.onFocus?.(target);
-  }
-
   dispose() {
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);
     this.canvas.removeEventListener("pointermove", this.onPointerMove);
@@ -695,5 +750,6 @@ export class InteractionController {
     this.xrControllerPoses = [];
     this.xrHands = [];
     this.xrGrabs.clear();
+    this.xrEmptyPress.clear();
   }
 }

@@ -304,9 +304,11 @@ listing, and commentary file URLs. API errors become explicit `MediaApiError`
 instances.
 
 Portal settings use schema version 5 under the `souvenir.settings` local-storage
-key. Older values receive caption-display and upload-generation defaults during
-reconciliation, and directory selections are reconciled against the current
-server tree.
+key. Older values receive caption-display, upload-generation, and commentary
+TTS (voice/pitch/rate) defaults during reconciliation, and directory selections
+are reconciled against the current server tree. The Add-commentary dialog reads
+its initial voice/pitch/rate from these settings and writes back the last
+selected values, so reopening the panel restores them.
 The portal Commentary card owns a separate, explicit-activation HTML audio
 element for testing sounds and editing their shared tags, captions, and volume.
 Its transient filter state supports AND matching over shared tag IDs plus a
@@ -454,7 +456,8 @@ In desktop preview the per-panel options panel is presented as a 2D DOM window
 `app/src/scene/panel-options-window.js:PanelOptionsWindow` instead of in-world
 chrome. `SpatialApp` passes the scene shell as the window host, and
 `PanelView.setOverlayScene` creates/disposes one window per view. Only the
-focused panel's window is visible; `PanelView` gates both the 3D options group
+selected panel's window is visible, and selecting another panel (or empty
+space) fully closes the previous one; `PanelView` gates both the 3D options group
 and the DOM window through the same visibility predicate, so the desktop mode
 keeps the 3D OPTIONS chrome out of the world. Window actions reuse the
 `PanelCoordinator.handleAction` and mask-workflow setting paths. A draggable
@@ -604,7 +607,7 @@ reliably darken passthrough.
 
 | Data | Location | Scope |
 |---|---|---|
-| Folder choices, autoplay, slideshow interval, caption size/transparency/distance, upload-generation depth/mask toggles | `souvenir.settings` in localStorage | Browser/device |
+| Folder choices, autoplay, slideshow interval, caption size/transparency/distance, upload-generation depth/mask toggles, commentary TTS voice/pitch/rate | `souvenir.settings` in localStorage | Browser/device |
 | Stable random-sort seed | `souvenir.media-random-seed` in localStorage | Browser/device |
 | Panels, transforms, media state, environment mode, runtime playlists | `souvenir.layout.v1` in localStorage | Browser/device + `library_id` |
 | Thumbnail JPEGs | `<media root>/.souvenir-thumbnails` | Server/library |
