@@ -2,14 +2,15 @@ import * as THREE from "three";
 
 import { markInteractive } from "../canvas-ui.js";
 
-import { PANEL_WIDTH } from "./constants.js";
+import { optionsWidth } from "./constants.js";
 
 /**
- * Adds the draggable backdrop behind all option controls.
+ * Adds the backdrop behind all option controls. The surrounding group owns the
+ * gesture target, so the whole window drags from anywhere inside the backdrop.
  */
-export function addBackdrop(content, { height, centerY }, { dragTarget, expandedTags }) {
+export function addBackdrop(content, { height, centerY }, { expandedTags }) {
   const backdrop = new THREE.Mesh(
-    new THREE.PlaneGeometry(PANEL_WIDTH + (expandedTags ? 0.58 : 0), height),
+    new THREE.PlaneGeometry(optionsWidth(expandedTags), height),
     new THREE.MeshBasicMaterial({
       color: 0x101817,
       transparent: true,
@@ -19,7 +20,7 @@ export function addBackdrop(content, { height, centerY }, { dragTarget, expanded
     }),
   );
   backdrop.position.set(0, centerY, -0.01);
-  backdrop.userData.gestureTarget = dragTarget;
+  backdrop.userData.kind = "options-surface";
   markInteractive(backdrop);
   content.add(backdrop);
   backdrop.renderOrder = -1;

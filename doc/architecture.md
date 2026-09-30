@@ -331,6 +331,12 @@ Pure selection, bulk-tag, and bounded image-transform calculations live in
 the metadata file once under its lock, so invalid input cannot leave a partially
 updated selection.
 
+`app/src/ui/tagging-controller.js:TaggingController` owns the full-screen
+tagging session. It accumulates per-cell tag selections for the current 3×3
+grid and persists the whole grid with `PUT /api/media-tags/bulk` each time the
+user advances to the next tag, so progress is saved before the queue is
+exhausted. Exhausting the queue additionally rotates in the next grid batch.
+
 ### Spatial runtime and ownership
 
 `SpatialApp` in `app/src/scene/spatial-app.js` is the runtime orchestrator. It
@@ -348,8 +354,8 @@ composition root:
 
 - `CommentaryController` owns scoring, audio lifecycle, volume, and the
   camera-facing `CaptionView`;
-- `ScenePlaybackController` owns scene CRUD, shot selection/capture, playback
-  timing, transitions, and scene-state notifications.
+- `SnapshotController` owns the eight device-local scene snapshot slots:
+  capture, selection, restore, clearing, and `libraryId`-scoped persistence.
 - `MaskWorkflow` owns erase-mask/depth caches, stale-response generations,
   editor state, ADM/automatic-mask polling, and panel application.
 - `PanelCoordinator` owns the serializable `PanelStore`, change-aware
@@ -446,11 +452,27 @@ state:
 `app/src/scene/panel-view.js:PanelView` adapts this state to Three.js meshes and
 canvas-texture controls. It also owns image double-tap arbitration, video
 play/pause, side navigation, mask overlay/alpha textures, and mask-editor
-controls. Stable panel options live in
+controls. Its top control row is defined by one `CONTROL_DEFINITIONS` table;
+entries flagged `videoOnly` are laid out only while the panel displays a video,
+and the row is re-centered and rescaled whenever that set changes. Because the
+desktop preview moves the row into a screen-space overlay, a relayout mirrors
+only the anchor's scale: copying the overlay group's world position back into
+the anchor would walk the row off screen on every frame. Stable panel options
+live in
 `app/src/scene/panel-options-view.js:PanelOptionsView`; it rebuilds dynamic tag
 controls only when their definitions, selection, save mode, or panel layout
-changes. CPU depth-plane construction lives separately in
-`app/src/scene/depth-surface.js`.
+changes, and it starts with the tag list collapsed. CPU depth-plane construction
+lives separately in `app/src/scene/depth-surface.js`.
+
+The options window is a child of its panel, so panel movement carries it along.
+`PanelOptionsView` owns the group-level `gestureTarget`/`manipulation`
+(`type: "options"`) and applies gestures exactly like `SpatialToolbar`: an
+absolute ray-drag pose slides the window in the panel's local space and a
+two-hand gesture rescales it within the shared `OPTIONS_SCALE_*` bounds. The
+chrome is billboarded and its depth belongs to the panel's UI depth offset, so a
+gesture cannot rotate or push it in Z. `PanelView` places the window once beside
+the panel and never re-lays it out, so later panel state changes cannot move it
+back.
 
 In desktop preview the per-panel options panel is presented as a 2D DOM window
 `app/src/scene/panel-options-window.js:PanelOptionsWindow` instead of in-world
@@ -460,13 +482,19 @@ selected panel's window is visible, and selecting another panel (or empty
 space) fully closes the previous one; `PanelView` gates both the 3D options group
 and the DOM window through the same visibility predicate, so the desktop mode
 keeps the 3D OPTIONS chrome out of the world. Window actions reuse the
-`PanelCoordinator.handleAction` and mask-workflow setting paths. A draggable
-title bar moves the window, and its position is remembered while the preview
-stays open but is not persisted to the layout. The mouse wheel over the window
-title bar rescales it 2D (`transform: scale`) within shared bounds defined with
-the 3D chrome, and in passthrough a two-hand pinch on the options backdrop
-emits the same incremental `hands: 2`/`scale` gesture media panels use; `PanelView`
-applies it to the options group as a uniform rescale without persisting it.
+`PanelCoordinator.handleAction` and mask-workflow setting paths. The window is
+stored as a free offset from the panel it belongs to: `PanelView.tick` projects
+the panel center into the host and calls `PanelOptionsWindow.follow`, so moving
+the panel moves the window while dragging the title bar only changes the offset.
+Both the first placement (beside the panel's right edge) and
+`app/src/core/options-window.js:optionsWindowPosition` clamping are transient
+and never persisted; the clamp applies to the drawn position only, so a window
+held against an edge returns to its dragged place as soon as the panel moves
+back. The offset and scale survive closing and reopening the window while the
+preview stays open. The mouse wheel over the window title bar rescales it 2D
+(`transform: scale` with a `top left` origin, so the window grows from its
+placed corner) within the same bounds used by the 3D chrome, and the clamp uses
+the scaled size.
 
 `app/src/scene/media-browser-view.js:MediaBrowserView` owns bounded directory
 navigation, pagination, view modes, sorting, thumbnail cards, and selection
@@ -478,9 +506,15 @@ enabled-directory set, and a navigation generation rejects late directory
 responses. Its background is movable/scalable; buttons and entries remain
 activation-only.
 
-`app/src/scene/spatial-toolbar.js:SpatialToolbar` owns panel add/remove and the
-attached environment chooser. It is movable, while action buttons are
-activation-only.
+`app/src/scene/spatial-toolbar.js:SpatialToolbar` owns panel add/remove, the
+attached environment chooser, and the scene snapshot controls: a **Snapshot**
+button plus eight fixed numbered slots (filled slots rebuild the scene when
+tapped and clear on press-and-hold). It is movable, while action buttons are
+activation-only. `app/src/scene/snapshot-controller.js:SnapshotController`
+captures the complete serializable scene (all panels with transforms, scale,
+and settings, plus the focused panel and environment mode) into
+`souvenir.snapshots.v1`; restoring stops all slideshows and rebuilds panels
+through `PanelStore.restoreFrom`.
 
 `app/src/scene/tag-menu.js:TagMenu` is the high-resolution, paginated spatial
 multi-select used by `MediaBrowserView` for its persistent panel-local filter.
@@ -492,7 +526,12 @@ assignment inline with mask, depth, and save-mode controls.
 `app/src/scene/media-texture.js:MediaTexture` wraps `TextureLoader` and
 `VideoTexture`. A load generation invalidates and disposes late results,
 ensuring an older image cannot replace a newer selection. `SpatialApp` adds a
-per-panel generation around media and mask stages.
+per-panel generation around media and mask stages. Video transport is transient:
+`isPlaying()` reports the element state, and `seekBy()` applies a relative skip
+clamped to the media bounds using the pure
+`app/src/core/video-transport.js:videoSeekTarget` math. Nothing about playback
+position reaches `PanelStore`, so a reload, a snapshot restore, or a reload of
+the same media always starts at the beginning.
 
 Images and videos use source dimensions to update display mapping:
 
@@ -610,6 +649,7 @@ reliably darken passthrough.
 | Folder choices, autoplay, slideshow interval, caption size/transparency/distance, upload-generation depth/mask toggles, commentary TTS voice/pitch/rate | `souvenir.settings` in localStorage | Browser/device |
 | Stable random-sort seed | `souvenir.media-random-seed` in localStorage | Browser/device |
 | Panels, transforms, media state, environment mode, runtime playlists | `souvenir.layout.v1` in localStorage | Browser/device + `library_id` |
+| Eight scene snapshots (panels, transforms, scale, settings, environment, focused panel) | `souvenir.snapshots.v1` in localStorage | Browser/device + `library_id` |
 | Thumbnail JPEGs | `<media root>/.souvenir-thumbnails` | Server/library |
 | Erase masks and blur metadata | `<media root>/.souvenir-masks` | Server/library, shared by all panels/clients |
 | Deleted media | `<media root>/.trashcan` | Server/library, excluded from all media routes |
@@ -672,9 +712,11 @@ Temporary media roots and FastAPI `TestClient` cover:
 
 Pure tests cover:
 
-- settings, layout identity, and panel-store persistence;
-- playlists, slideshow policy, display/aspect layout;
+- settings, layout identity, panel-store persistence, and scene snapshot slots;
+- playlists, slideshow policy, display/aspect layout, video seek clamping, and
+  panel video-transport action routing;
 - one-/two-ray geometry and gesture limits;
+- desktop options window anchoring and clamping;
 - erase-mask strokes, blur/opacity conversion;
 - environment configuration and XR stereo positioning;
 - commentary scoring, caption timelines, camera-facing caption pose, volume
@@ -688,15 +730,20 @@ whose WebGL tests are serial within each file. This preserves limited GPU
 concurrency while avoiding one global serial queue. The flows cover:
 
 - startup progress, errors, folder hierarchy, and root changes;
-- panel/browser/toolbar controls and persistence;
-- media load races, image modes, ratios, and video playback;
+- panel/browser/toolbar controls and persistence, including snapshot capture,
+  restore, update, and press-and-hold clearing;
+- media load races, image modes, ratios, and video playback, including the
+  panel toolbar's video play/pause and 15 second skips against a served
+  byte-range WebM fixture;
 - mask painting/global application/toggles and generated WebM masks;
 - portal tag CRUD, cross-panel assignments, AND filters, and race handling;
 - compact responsive Portal layout and viewport-bounded commentary rows;
 - commentary discovery/test playback/filtering/tagging/captions/volume, weighted
   AR selection, audio-clock caption timing, ended chaining, and audio cleanup;
 - environment chooser, render ordering, and persistence;
-- absolute panel/browser manipulation contracts.
+- absolute panel/browser manipulation contracts;
+- options window placement, free dragging, attachment to its panel, collapsed tag
+  list, and gesture-driven movement and rescale of the in-scene chrome.
 
 Hardware passthrough composition, optical hand tracking, and real headset audio
 placement still require manual Quest smoke checks.
@@ -722,6 +769,7 @@ placement still require manual Quest smoke checks.
   useful Quest quality/performance presets.
 - Consider a shared label atlas if panel counts make canvas-texture allocation a
   measurable cost after the current dependency-gated rebuilds.
-- Store multiple named layouts rather than one library-scoped local slot.
+- Allow renaming snapshots or growing the fixed eight-slot toolbar row if users
+  need more saved arrangements.
 - Add depth-aware XR effects only when a standardized, permissioned depth API is
   available; passthrough camera pixels remain intentionally inaccessible.

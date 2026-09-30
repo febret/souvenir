@@ -10,6 +10,7 @@ export const SLIDESHOW_MODE_DEFINITIONS = [
   ["Tag", "tag"],
 ];
 export const PANEL_WIDTH = 0.84;
+export const TAG_COLUMN_WIDTH = 0.58;
 export const PADDING = 0.015;
 export const TITLE_HEIGHT = 0.06;
 export const SECTION_GAP = 0.012;
@@ -22,6 +23,11 @@ export const ADM_SLIDER_ROW_GAP = 0.012;
 export const ADM_SLIDER_ROW_STEP = ADM_SLIDER_HEIGHT + ADM_SLIDER_ROW_GAP;
 export const TAG_COLUMNS = 3;
 export const SWATCH_SIZE = 0.07;
+
+/** Window width, shared by the backdrop and the initial placement beside a panel. */
+export function optionsWidth(expandedTags) {
+  return PANEL_WIDTH + (expandedTags ? TAG_COLUMN_WIDTH : 0);
+}
 
 // Uniform rescale bounds shared by the 3D options chrome and the desktop 2D
 // window. Kept transient (like the desktop window position), not persisted.

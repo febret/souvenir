@@ -24,9 +24,8 @@ DEPTH_DIRECTORY = ".souvenir-depth"
 TRASH_DIRECTORY = ".trashcan"
 TTS_WORK_DIRNAME = ".souvenir-tts"
 TAG_STORAGE_FILE = ".souvenir-tags.json"
-SCENE_STORAGE_FILE = ".souvenir-scenes.json"
 INTERNAL_DIRECTORIES = {CACHE_DIRECTORY, MASK_DIRECTORY, DEPTH_DIRECTORY, TRASH_DIRECTORY, ".souvenir-certs", TTS_WORK_DIRNAME}
-INTERNAL_FILES = {TAG_STORAGE_FILE, SCENE_STORAGE_FILE}
+INTERNAL_FILES = {TAG_STORAGE_FILE}
 
 
 def normalize_relative(path: str | Path | None) -> Path:

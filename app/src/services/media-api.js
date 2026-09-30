@@ -113,36 +113,6 @@ export class MediaApi {
     return readJson(await fetch(`${this.baseUrl}/api/tags`, noStore()));
   }
 
-  async scenes() {
-    return readJson(await fetch(`${this.baseUrl}/api/scenes`, noStore()));
-  }
-
-  async createScene(name) {
-    return readJson(await fetch(`${this.baseUrl}/api/scenes`, noStore({
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    })));
-  }
-
-  async scene(sceneId) {
-    return readJson(await fetch(
-      `${this.baseUrl}/api/scenes/${encodeURIComponent(String(sceneId))}`,
-      noStore(),
-    ));
-  }
-
-  async saveScene(sceneId, scene) {
-    return readJson(await fetch(
-      `${this.baseUrl}/api/scenes/${encodeURIComponent(String(sceneId))}`,
-      noStore({
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(scene),
-      }),
-    ));
-  }
-
   async commentary() {
     return readJson(await fetch(`${this.baseUrl}/api/commentary`, noStore()));
   }

@@ -14,11 +14,17 @@ import {
 const ADM_SLIDER_COUNT = 5;
 
 /**
+ * Local Y of the window's top edge inside its group. Placement beside a panel
+ * and the stacked sections below both resolve against this edge.
+ */
+export const OPTIONS_TOP_EDGE = 0.25;
+
+/**
  * Pure vertical layout for the options panel. Every section stacks downward
  * from a fixed top edge; tag rows extend the bottom.
  */
 export function computeLayout({ tagCount, expandedTags }) {
-  const topY = 0.25;
+  const topY = OPTIONS_TOP_EDGE;
   const optionsY = topY - 0.06 - SECTION_GAP - OPTIONS_ROW_HEIGHT / 2;
   const saveLabelY = optionsY - OPTIONS_ROW_HEIGHT / 2 - SECTION_GAP - 0.01;
   const saveRowY = saveLabelY - 0.03 - SECTION_GAP - SAVE_ROW_HEIGHT / 2;

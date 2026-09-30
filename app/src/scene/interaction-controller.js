@@ -28,6 +28,8 @@ function setXrControllerRay(raycaster, controller) {
 
 // Pointer travel (px) beyond which a press counts as a drag instead of a tap.
 const TAP_SLOP_PX = 5;
+// Press duration (ms) at which a hold-capable button activates its hold action.
+const BUTTON_HOLD_MS = 600;
 
 export class InteractionController {
   constructor({ renderer, camera, scene, overlayScene, canvas, onActivate, onGesture, onBackgroundActivate }) {
@@ -50,6 +52,9 @@ export class InteractionController {
     // assumes every xrGrabs entry carries drag state, so an empty press must
     // never enter that map (it threw every frame while held, freezing XR).
     this.xrEmptyPress = new Map();
+    // Hold-capable buttons defer activation to select end so a press-and-hold
+    // can trigger a distinct hold action.
+    this.xrHold = new Map();
     this.xrControllers = [];
     this.xrControllerPoses = [];
     this.xrHands = [];
@@ -100,6 +105,7 @@ export class InteractionController {
         start: new THREE.Vector2(event.clientX, event.clientY),
         last: new THREE.Vector2(event.clientX, event.clientY),
         moved: false,
+        startedAt: performance.now(),
       };
       this.canvas.setPointerCapture(event.pointerId);
     };
@@ -151,7 +157,9 @@ export class InteractionController {
       if (this.desktopDrag.drawing) {
         this.#draw(this.desktopDrag.drawTarget, "end", this.desktopDrag.lastHit);
       } else if (!this.desktopDrag.moved) {
-        this.onActivate?.(this.desktopDrag.hit, { source: "desktop-pointer" });
+        const held = Boolean(this.desktopDrag.hit?.object?.userData?.holdAction)
+          && performance.now() - (this.desktopDrag.startedAt ?? 0) >= BUTTON_HOLD_MS;
+        this.onActivate?.(this.desktopDrag.hit, { source: "desktop-pointer", hold: held });
       }
       this.desktopDrag = null;
       if (this.canvas.hasPointerCapture(event.pointerId)) {
@@ -253,6 +261,10 @@ export class InteractionController {
     const gesture = this.#gestureTargetInfo(hit);
     const { target, root } = gesture;
     if (!target) {
+      if (typeof hit.object.userData.holdAction === "string") {
+        this.xrHold.set(index, { hit, startedAt: performance.now() });
+        return;
+      }
       this.onActivate?.(hit, { source: "xr-select-start" });
       return;
     }
@@ -277,6 +289,13 @@ export class InteractionController {
   }
 
   #xrSelectEnd(index) {
+    const hold = this.xrHold.get(index);
+    if (hold) {
+      this.xrHold.delete(index);
+      const held = performance.now() - hold.startedAt >= BUTTON_HOLD_MS;
+      this.onActivate?.(hold.hit, { source: "xr-select", hold: held });
+      return;
+    }
     const emptyPress = this.xrEmptyPress.get(index);
     if (emptyPress) {
       const controller = this.xrControllers[index];
@@ -500,6 +519,7 @@ export class InteractionController {
     if (!manipulation || !target) return false;
     if (manipulation.type === "browser") return true;
     if (manipulation.type === "toolbar") return true;
+    if (manipulation.type === "options") return true;
     if (manipulation.type !== "panel" || typeof target !== "string"
       || root.userData.panelId !== target || root.userData.maskEditing) return false;
     return Boolean(root.userData.minimized)
@@ -751,5 +771,6 @@ export class InteractionController {
     this.xrHands = [];
     this.xrGrabs.clear();
     this.xrEmptyPress.clear();
+    this.xrHold.clear();
   }
 }

@@ -1,5 +1,7 @@
 import * as THREE from "three";
 
+import { videoSeekTarget } from "../core/video-transport.js";
+
 function mediaKind(item) {
   const declared = item?.mediaType ?? item?.media_type ?? item?.type;
   if (typeof declared === "string" && declared.startsWith("video")) {
@@ -105,6 +107,36 @@ export class MediaTexture {
 
   pause() {
     this.video?.pause();
+  }
+
+  /** True only while the element is actually advancing; an ended video reads as paused. */
+  isPlaying() {
+    return Boolean(this.video && !this.video.paused && !this.video.ended);
+  }
+
+  get currentTime() {
+    return this.video?.currentTime ?? 0;
+  }
+
+  get duration() {
+    return this.video?.duration ?? Number.NaN;
+  }
+
+  /**
+   * Moves the video by a relative number of seconds, clamped to its bounds.
+   * Returns the applied position, or null when no video can be seeked.
+   */
+  seekBy(deltaSeconds) {
+    const video = this.video;
+    if (!video || !Number.isFinite(video.duration) || video.duration <= 0) return null;
+    const target = videoSeekTarget(video.currentTime, deltaSeconds, video.duration);
+    if (target === null) return null;
+    try {
+      video.currentTime = target;
+    } catch {
+      return null;
+    }
+    return target;
   }
 
   dispose() {

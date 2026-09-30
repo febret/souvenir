@@ -229,6 +229,41 @@ const entries = {
   }],
 };
 
+/**
+ * Serves a video body with the byte-range support the real server provides, so
+ * tests can seek a panel video instead of only playing it from the start.
+ */
+function fulfillVideo(route, body) {
+  const total = body.length;
+  const match = /^bytes=(\d*)-(\d*)$/.exec((route.request().headers().range ?? "").trim());
+  if (!match) {
+    return route.fulfill({
+      status: 200,
+      contentType: "video/webm",
+      headers: { "accept-ranges": "bytes", "content-length": String(total) },
+      body,
+    });
+  }
+  const start = match[1] ? Number(match[1]) : 0;
+  const end = match[2] ? Math.min(Number(match[2]), total - 1) : total - 1;
+  if (start > end || start >= total) {
+    return route.fulfill({
+      status: 416,
+      headers: { "accept-ranges": "bytes", "content-range": `bytes */${total}` },
+    });
+  }
+  return route.fulfill({
+    status: 206,
+    contentType: "video/webm",
+    headers: {
+      "accept-ranges": "bytes",
+      "content-range": `bytes ${start}-${end}/${total}`,
+      "content-length": String(end - start + 1),
+    },
+    body: body.subarray(start, end + 1),
+  });
+}
+
 async function mockServer(
   page,
   {
@@ -252,7 +287,6 @@ async function mockServer(
     autoDepthServer = { jobs: new Map(), requests: [], autoComplete: true, device: "cuda" },
     admServer = { settings: new Map(), requests: [] },
     tagServer = { tags: [], assignments: new Map(), requests: [], nextId: 1 },
-    sceneServer = { scenes: new Map(), requests: [], nextId: 1 },
     commentaryServer = {
       available: false,
       entries: [],
@@ -282,9 +316,6 @@ async function mockServer(
   } = {},
 ) {
   let statusIndex = 0;
-  sceneServer.scenes ??= new Map();
-  sceneServer.requests ??= [];
-  sceneServer.nextId ??= 1;
   commentaryServer.captions ??= new Map();
   commentaryServer.volumes ??= new Map();
   ttsServer.jobs ??= new Map();
@@ -302,60 +333,6 @@ async function mockServer(
     }
     if (url.pathname === "/api/health") {
       return route.fulfill({ json: { status: "ok", library_id: libraryId } });
-    }
-    if (url.pathname === "/api/scenes") {
-      const method = route.request().method();
-      sceneServer.requests.push({ method, path: url.pathname });
-      if (method === "GET") {
-        return route.fulfill({
-          json: {
-            scenes: [...sceneServer.scenes.values()].map((scene) => ({
-              id: scene.id,
-              name: scene.name,
-              loop: scene.loop,
-              default_duration_sec: scene.default_duration_sec,
-              shot_count: scene.shots.length,
-              updated_at: scene.updated_at,
-            })),
-          },
-        });
-      }
-      if (method === "POST") {
-        const body = route.request().postDataJSON() ?? {};
-        const scene = {
-          id: `scene-${sceneServer.nextId++}`,
-          name: typeof body.name === "string" && body.name.trim() ? body.name.trim() : "New scene",
-          loop: true,
-          default_duration_sec: 8,
-          current_shot_id: null,
-          shots: [],
-          updated_at: "2026-03-01T00:00:00Z",
-        };
-        sceneServer.scenes.set(scene.id, scene);
-        return route.fulfill({ status: 201, json: scene });
-      }
-    }
-    if (url.pathname.startsWith("/api/scenes/")) {
-      const method = route.request().method();
-      const sceneId = decodeURIComponent(url.pathname.slice("/api/scenes/".length));
-      sceneServer.requests.push({ method, path: url.pathname });
-      if (method === "GET" || method === "PUT") {
-        const scene = sceneServer.scenes.get(sceneId);
-        if (!scene) return route.fulfill({ status: 404, json: { detail: "Scene not found." } });
-        if (method === "PUT") {
-          const body = route.request().postDataJSON() ?? {};
-          const saved = {
-            ...scene,
-            ...body,
-            id: scene.id,
-            name: scene.name,
-            updated_at: "2026-03-01T00:00:01Z",
-          };
-          sceneServer.scenes.set(sceneId, saved);
-          return route.fulfill({ json: saved });
-        }
-        return route.fulfill({ json: scene });
-      }
     }
     if (url.pathname === "/api/tree") {
       return route.fulfill({
@@ -382,8 +359,8 @@ async function mockServer(
         json: {
           path,
           entries: resolvedEntries,
-          directories: [],
-          files: [],
+          directories: resolvedEntries.filter((entry) => entry.kind === "directory"),
+          files: resolvedEntries.filter((entry) => entry.kind === "file"),
         },
       });
     }
@@ -635,11 +612,7 @@ async function mockServer(
       }
       const video = videoFixtures[path];
       if (video) {
-        return route.fulfill({
-          status: 200,
-          contentType: "video/webm",
-          body: video,
-        });
+        return fulfillVideo(route, video);
       }
       const image = IMAGE_FIXTURES[path] ?? DEFAULT_IMAGE_FIXTURE;
       return route.fulfill({
@@ -1007,6 +980,20 @@ async function clickSceneObject(page, matcher, localPoint = null) {
   await page.mouse.click(point.x, point.y);
 }
 
+async function holdSceneObject(page, matcher, holdMs = 800, localPoint = null) {
+  let point = null;
+  await expect
+    .poll(async () => {
+      point = await sceneObjectScreenPoint(page, matcher, localPoint);
+      return Boolean(point);
+    }, { message: `Expected scene object ${JSON.stringify(matcher)}` })
+    .toBe(true);
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.waitForTimeout(holdMs);
+  await page.mouse.up();
+}
+
 async function doubleTapSceneObject(page, matcher, localPoint = null) {
   const point = await sceneObjectScreenPoint(page, matcher, localPoint);
   expect(point, `Expected scene object ${JSON.stringify(matcher)}`).not.toBeNull();
@@ -1087,63 +1074,71 @@ async function paintAcrossPanelSurface(page, panelId) {
   await page.mouse.up();
 }
 
-async function selectBeachImage(page, panelId) {
+async function selectMediaEntry(page, panelId, path) {
   await clickSceneObject(page, { action: "browse", panelId });
   await expect.poll(() => page.evaluate(() => window.__souvenirApp.browser?.visible)).toBe(true);
-  await clickSceneObject(page, {
-    kind: "browser-entry",
-    entryPath: "albums/beach.jpg",
-  });
-  if (await page.evaluate((id) =>
-    window.__souvenirApp.store.getState().panels.find((panel) => panel.id === id)?.media.selectedId,
-  panelId) !== "albums/beach.jpg") {
-    await clickSceneObject(page, {
-      kind: "browser-entry",
-      entryPath: "albums/beach.jpg",
-    });
+  const selected = () => page.evaluate(
+    (id) => window.__souvenirApp.store.getState().panels.find((panel) => panel.id === id)?.media.selectedId,
+    panelId,
+  );
+  if (await selected() !== path) {
+    await clickSceneObject(page, { kind: "browser-entry", entryPath: path });
   }
-  if (await page.evaluate((id) =>
-    window.__souvenirApp.store.getState().panels.find((panel) => panel.id === id)?.media.selectedId,
-  panelId) !== "albums/beach.jpg") {
-    await page.evaluate(async () => {
+  if (await selected() !== path) {
+    await clickSceneObject(page, { kind: "browser-entry", entryPath: path });
+  }
+  if (await selected() !== path) {
+    await page.evaluate(async (entryPath) => {
       const entry = window.__souvenirApp.browser.entries.find(
-        (item) => item.path === "albums/beach.jpg",
+        (item) => item.path === entryPath,
       );
-      if (!entry) throw new Error("The beach media entry is unavailable.");
+      if (!entry) throw new Error(`The ${entryPath} media entry is unavailable.`);
       await window.__souvenirApp.browser.activateEntry(entry);
-    });
+    }, path);
   }
-  await expect.poll(() =>
-    page.evaluate((id) =>
-      window.__souvenirApp.store.getState().panels.find((panel) => panel.id === id)?.media.selectedId,
-    panelId),
-  ).toBe("albums/beach.jpg");
+  await expect.poll(() => selected()).toBe(path);
 }
 
-async function createTinyWebm(page) {
-  const bytes = await page.evaluate(async () => {
+async function selectBeachImage(page, panelId) {
+  await selectMediaEntry(page, panelId, "albums/beach.jpg");
+}
+
+async function createTinyWebm(page, seconds = 2) {
+  const bytes = await page.evaluate(async (durationMs) => {
     if (!globalThis.MediaRecorder) return null;
     const mimeType = ["video/webm;codecs=vp8", "video/webm"]
       .find((candidate) => MediaRecorder.isTypeSupported(candidate));
     if (!mimeType) return null;
     const canvas = document.createElement("canvas");
-    canvas.width = 2;
-    canvas.height = 2;
-    canvas.getContext("2d").fillStyle = "#7cd7a1";
-    canvas.getContext("2d").fillRect(0, 0, 2, 2);
+    canvas.width = 64;
+    canvas.height = 64;
+    const context = canvas.getContext("2d");
+    // MediaRecorder needs repaints: a single painted frame records no video.
+    let running = true;
+    let frame = 0;
+    const paint = () => {
+      frame += 1;
+      context.fillStyle = frame % 2 ? "#7cd7a1" : "#3355ff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      if (running) requestAnimationFrame(paint);
+    };
+    paint();
     if (!canvas.captureStream) return null;
     const stream = canvas.captureStream(10);
     const chunks = [];
     const blob = await new Promise((resolve, reject) => {
-      const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 100_000 });
+      const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 200_000 });
       recorder.addEventListener("dataavailable", (event) => chunks.push(event.data));
       recorder.addEventListener("error", () => reject(new Error("MediaRecorder failed.")), { once: true });
       recorder.addEventListener("stop", () => resolve(new Blob(chunks, { type: mimeType })), { once: true });
-      recorder.start();
-      setTimeout(() => recorder.stop(), 200);
+      recorder.start(200);
+      setTimeout(() => {
+        running = false;
+        recorder.stop();
+      }, durationMs);
     });
     return [...new Uint8Array(await blob.arrayBuffer())];
-  });
+  }, Math.round(seconds * 1000));
   expect(bytes, "Chromium must support a generated WebM fixture").not.toBeNull();
   return Buffer.from(bytes);
 }
@@ -1184,11 +1179,13 @@ export {
   expandDirectory,
   expandAllDirectories,
   clickSceneObject,
+  holdSceneObject,
   doubleTapSceneObject,
   sceneObjectScreenPoint,
   panelSurfaceScreenPoint,
   dragSceneObject,
   paintAcrossPanelSurface,
+  selectMediaEntry,
   selectBeachImage,
   createTinyWebm,
   createMaskPng,

@@ -125,7 +125,6 @@ Internal media-root data:
 - `.souvenir-depth/`
 - `.trashcan/`
 - `.souvenir-tags.json`
-- `.souvenir-scenes.json`
 
 When adding a new internal file or directory, exclude it consistently from
 listing, scanning, direct media access, and tests.
@@ -174,6 +173,8 @@ listing, scanning, direct media access, and tests.
 - Portal settings use `souvenir.settings`.
 - Spatial state uses `souvenir.layout.v1` and must remain scoped by
   `libraryId`.
+- The eight scene snapshots use `souvenir.snapshots.v1`, are device-local, and
+  must remain scoped by `libraryId`.
 - Server-owned masks, tags, commentary assignments, captions, and per-sound
   volume must not be duplicated as authoritative browser state.
 - Guard asynchronous media, mask, commentary, tag, and playlist operations with

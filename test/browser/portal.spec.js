@@ -192,3 +192,49 @@ test("adds a commentary clip from the TTS dialog and lists the saved file", asyn
     tagIds: ["tag-1"],
   }));
 });
+
+test("persists each grid's tags as soon as the next tag is shown", async ({ page }) => {
+  await page.unroute("**/api/**");
+  const { tagServer } = await mockServer(page, {
+    tagServer: {
+      tags: [{ id: "horse", name: "Horse" }, { id: "blue", name: "Blue" }],
+      assignments: new Map(),
+      requests: [],
+      nextId: 1,
+    },
+  });
+  await page.goto("/?debug=1");
+
+  await page.locator('.directory-row input[value="albums"]').check();
+  await page.locator("#tagging-button").click();
+
+  await expect(page.locator("#tagging-shell")).toBeVisible();
+  const cells = page.locator("#tagging-grid .tagging-cell");
+  await expect(cells).toHaveCount(9);
+
+  // Tag one image with the active tag, then advance without finishing the queue.
+  const candidate = page.locator("#tagging-grid .tagging-cell:not(.tagging-cell--has-tag)").first();
+  const taggedPath = await candidate.getAttribute("data-path");
+  const cell = page.locator(`#tagging-grid .tagging-cell[data-path="${taggedPath}"]`);
+  const tagId = await cell.getAttribute("data-tag-id");
+  expect(tagId).toBeTruthy();
+  await cell.click();
+  await expect(cell).toHaveClass(/tagging-cell--has-tag/);
+
+  await page.locator("#tagging-next").click();
+
+  // The grid is saved to the server as soon as the next tag becomes active,
+  // not only when the tag queue is exhausted.
+  await expect
+    .poll(() =>
+      tagServer.requests.some(
+        (request) => request.method === "PUT_BULK" && request.path === taggedPath,
+      ),
+    )
+    .toBe(true);
+  const saved = tagServer.requests.find(
+    (request) => request.method === "PUT_BULK" && request.path === taggedPath,
+  );
+  expect(saved.tagIds).toContain(tagId);
+  expect(tagServer.assignments.get(taggedPath)).toContain(tagId);
+});

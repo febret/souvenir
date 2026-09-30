@@ -829,6 +829,41 @@ export class TaggingController {
     }
   }
 
+  #gridAssignments() {
+    return this.gridFiles.map((file) => ({
+      path: file.path,
+      tag_ids: [...file.sessionTagIds],
+    }));
+  }
+
+  async #applyGridTags() {
+    this.saving = true;
+    this.elements.nextBtn.disabled = true;
+    this.elements.deleteModeBtn.disabled = true;
+    this.#setStatus("Applying tags…");
+    try {
+      const assignments = this.#gridAssignments();
+      if (assignments.length > 0) {
+        await this.api.saveMediaTagsBulk(assignments);
+        for (const file of this.gridFiles) {
+          const entry = this.allFiles.find((candidate) => candidate.path === file.path);
+          if (entry) {
+            entry.tag_ids = [...file.sessionTagIds];
+          }
+        }
+      }
+      return true;
+    } catch (error) {
+      this.onError(error);
+      this.#setStatus("Error saving tags.");
+      return false;
+    } finally {
+      this.saving = false;
+      this.elements.nextBtn.disabled = false;
+      this.elements.deleteModeBtn.disabled = false;
+    }
+  }
+
   async #nextTag() {
     if (this.saving) {
       return;
@@ -841,6 +876,11 @@ export class TaggingController {
       await this.#saveAndAdvance();
       return;
     }
+
+    if (!(await this.#applyGridTags())) {
+      return;
+    }
+    this.#setStatus("");
 
     this.currentTagIndex += 1;
     this.tagStartedAt = Date.now();
@@ -872,10 +912,7 @@ export class TaggingController {
     this.#setStatus("Saving tags…");
 
     try {
-      const assignments = this.gridFiles.map((file) => ({
-        path: file.path,
-        tag_ids: [...file.sessionTagIds],
-      }));
+      const assignments = this.#gridAssignments();
       await this.api.saveMediaTagsBulk(assignments);
 
       const setElapsed = this.batchStartedAt ? Date.now() - this.batchStartedAt : 0;

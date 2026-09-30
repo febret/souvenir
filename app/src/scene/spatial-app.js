@@ -12,7 +12,7 @@ import { SpatialToolbar } from "./spatial-toolbar.js";
 import { createPreviewEnvironment } from "./environment.js";
 import { disposeObject } from "./canvas-ui.js";
 import { CommentaryController } from "./commentary-controller.js";
-import { ScenePlaybackController } from "./scene-playback-controller.js";
+import { SnapshotController } from "./snapshot-controller.js";
 import { MaskWorkflow } from "./mask-workflow.js";
 import { PanelCoordinator } from "./panel-coordinator.js";
 
@@ -25,7 +25,6 @@ export class SpatialApp {
     libraryId,
     onExit,
     onError,
-    onSceneStateChange,
   }) {
     this.canvas = canvas;
     this.api = api;
@@ -39,9 +38,7 @@ export class SpatialApp {
     this.zenMode = false;
     this.environmentMode = DEFAULT_ENVIRONMENT_MODE;
     this.environmentBlendMode = "unknown";
-    this.onSceneStateChange = onSceneStateChange;
     this.#initializeScene();
-    this.scenePlayback.emitState();
   }
 
   #initializeScene() {
@@ -85,20 +82,6 @@ export class SpatialApp {
       onError: this.onError,
       createAudio: () => document.createElement("audio"),
     });
-    this.scenePlayback = new ScenePlaybackController({
-      api: this.api,
-      getPanels: () => this.panelState.panels,
-      applyPanelSnapshot: (snapshot) => this.panelCoordinator.applyScenePanelSnapshot(snapshot),
-      removePanel: (panelId) => this.store.remove(panelId),
-      applyPanelTransition: (panelId, step, progress) => {
-        this.panelViews.get(panelId)?.applySceneTransition(step, progress);
-      },
-      clearPanelTransition: (panelId) => {
-        this.panelViews.get(panelId)?.clearSceneTransition();
-      },
-      onStateChange: this.onSceneStateChange,
-      onError: this.onError,
-    });
     this.maskWorkflow = new MaskWorkflow({
       api: this.api,
       getSettings: this.getSettings,
@@ -130,12 +113,27 @@ export class SpatialApp {
       isZenMode: () => this.zenMode,
       updateControls: () => this.controls?.update(),
       onPanelsChanged: (entries, focusedId) => this.toolbar?.setPanels(entries, focusedId),
-      onCompositionChanged: () => {
-        if (this.panelCoordinator) this.scenePlayback.compositionChanged();
-      },
       onError: this.onError,
     });
-    this.scenePlayback.compositionChanged();
+    this.snapshotController = new SnapshotController({
+      storage: this.storage,
+      libraryId: this.libraryId,
+      getScene: () => ({
+        panels: this.panelState.panels,
+        focusedId: this.panelState.focusedId,
+        environmentMode: this.environmentMode,
+      }),
+      applyScene: (snapshot) => {
+        this.panelCoordinator.stopAllSlideshows();
+        this.store.restoreFrom({
+          panels: snapshot.panels,
+          focusedId: snapshot.focusedId,
+        });
+        this.setEnvironmentMode(snapshot.environmentMode);
+      },
+      onSlotsChanged: (slots, selectedIndex) => this.toolbar?.setSnapshots(slots, selectedIndex),
+      onError: this.onError,
+    });
 
     this.interactions = new InteractionController({
       renderer: this.renderer,
@@ -203,7 +201,6 @@ export class SpatialApp {
   stop() {
     this.commentary.stop();
     if (!this.running) return;
-    this.scenePlayback.stop();
     this.maskWorkflow.stop();
     this.running = false;
     this.renderer.setAnimationLoop(null);
@@ -217,7 +214,7 @@ export class SpatialApp {
   dispose() {
     this.stop();
     this.commentary.dispose();
-    this.scenePlayback.dispose();
+    this.snapshotController?.dispose();
     this.maskWorkflow.dispose();
     window.removeEventListener("resize", this.onResize);
     this.interactions?.dispose();
@@ -290,49 +287,15 @@ export class SpatialApp {
     return this.zenMode;
   }
 
-  getSceneState() {
-    return this.scenePlayback.getState();
-  }
-
-  async listScenes() {
-    return this.scenePlayback.list();
-  }
-
-  async createNamedScene(name) {
-    return this.scenePlayback.create(name);
-  }
-
-  async loadScene(sceneId) {
-    return this.scenePlayback.load(sceneId);
-  }
-
-  resetToNewScene() {
-    return this.scenePlayback.reset();
-  }
-
-  async setSceneLoop(loop) {
-    return this.scenePlayback.setLoop(loop);
-  }
-
-  async setSceneShotDuration(durationSec) {
-    return this.scenePlayback.setShotDuration(durationSec);
-  }
-
-  async selectSceneShot(index) {
-    return this.scenePlayback.selectShot(index);
-  }
-
-  async toggleScenePlayback() {
-    return this.scenePlayback.togglePlayback();
-  }
-
-  async captureOrDeleteSceneShot() {
-    return this.scenePlayback.captureOrDeleteShot();
-  }
-
   #activate(hit, context = null) {
     const { object, uv } = hit;
     const { kind, action, panelId } = object.userData;
+    if (context?.hold) {
+      if (typeof object.userData.holdAction === "string") {
+        this.#toolbarAction(object.userData.holdAction);
+      }
+      return;
+    }
     if (kind === "button") {
       if (object.userData.tagMenu) {
         object.userData.tagMenu.handleAction(action).catch((error) => this.onError?.(error));
@@ -385,6 +348,12 @@ export class SpatialApp {
       this.toolbar.setEnvironmentMenuOpen(false);
     } else if (action.startsWith("focus-panel:")) {
       this.store.focus(action.slice("focus-panel:".length));
+    } else if (action === "capture-snapshot") {
+      this.snapshotController?.capture();
+    } else if (action.startsWith("select-snapshot:")) {
+      this.snapshotController?.selectSlot(Number(action.slice("select-snapshot:".length)));
+    } else if (action.startsWith("clear-snapshot:")) {
+      this.snapshotController?.clear(Number(action.slice("clear-snapshot:".length)));
     }
   }
 
@@ -399,9 +368,7 @@ export class SpatialApp {
     const viewCamera = this.renderer.xr.isPresenting
       ? this.renderer.xr.getCamera(this.camera)
       : this.camera;
-    this.scenePlayback.advancePlayback(time);
     this.panelCoordinator.tick(time, viewCamera);
-    this.scenePlayback.updateTransition(time);
     this.commentary.update(viewCamera);
     this.environmentEffects.render(this.renderer, this.scene, this.camera, time);
     if (!this.immersive) {

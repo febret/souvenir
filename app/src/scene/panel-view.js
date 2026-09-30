@@ -9,6 +9,7 @@ import {
   makeCanvasTexture,
   makeLabelTexture,
   roundedRect,
+  setButtonLabel,
 } from "./canvas-ui.js";
 import { MediaTexture } from "./media-texture.js";
 import {
@@ -24,19 +25,28 @@ import { SpatialSlider } from "./spatial-slider.js";
 import { PanelOptionsView } from "./panel-options-view.js";
 import { PanelOptionsWindow } from "./panel-options-window.js";
 import { createDisplacedPlaneGeometry } from "./depth-surface.js";
-import {
-  ADM_SLIDER_ROW_STEP,
-  clampOptionsScale,
-} from "./panel-options/constants.js";
+import { ADM_SLIDER_ROW_STEP } from "./panel-options/constants.js";
+import { OPTIONS_TOP_EDGE } from "./panel-options/layout.js";
+import { OPTIONS_WINDOW_MARGIN } from "../core/options-window.js";
 
 const DOUBLE_TAP_WINDOW_MS = 325;
 const DOUBLE_TAP_MAX_UV_DISTANCE = 0.15;
-
+// Black medium right-pointing triangle and double bar: distinct from the
+// slideshow transport glyph and from the previous/next triangles.
+const VIDEO_PLAY_GLYPH = "⏵";
+const VIDEO_PAUSE_GLYPH = "⏸";
+const VIDEO_CONTROL_FONT = "700 148px system-ui, sans-serif";
+const VIDEO_SEEK_FONT = "700 78px system-ui, sans-serif";
+// [label, action, font, videoOnly] - videoOnly controls are laid out only
+// while the panel displays a video.
 const CONTROL_DEFINITIONS = [
   ["🎞️", "browse", "700 148px system-ui, sans-serif"],
   ["◀️", "previous", "700 148px system-ui, sans-serif"],
   ["⏯️", "toggle-slideshow", "700 126px system-ui, sans-serif"],
   ["▶️", "next", "700 148px system-ui, sans-serif"],
+  [VIDEO_PAUSE_GLYPH, "toggle-video-playback", VIDEO_CONTROL_FONT, true],
+  ["-15s", "seek-video-backward", VIDEO_SEEK_FONT, true],
+  ["+15s", "seek-video-forward", VIDEO_SEEK_FONT, true],
   ["🔒", "toggle-lock", "700 136px system-ui, sans-serif"],
   ["➖", "toggle-minimize", "700 142px system-ui, sans-serif"],
   ["⧉", "clone-panel", "700 148px system-ui, sans-serif"],
@@ -44,9 +54,7 @@ const CONTROL_DEFINITIONS = [
 ];
 const CONTROL_BUTTON_SIZE = 0.08;
 const CONTROL_BUTTON_GAP = 0.018;
-const CONTROL_ROW_WIDTH =
-  CONTROL_DEFINITIONS.length * CONTROL_BUTTON_SIZE
-  + (CONTROL_DEFINITIONS.length - 1) * CONTROL_BUTTON_GAP;
+const MIN_CONTROL_SCALE = 0.42;
 const PANEL_UI_FRONT_BASE_Z = 0.02;
 const PANEL_UI_DEPTH_CLEARANCE_Z = 0.012;
 const PANEL_NUMBER_BADGE_BASE_Z = 0.02;
@@ -55,8 +63,12 @@ const PANEL_EDITOR_CONTROLS_BASE_Z = 0.03;
 const PANEL_OPTIONS_BASE_Z = 0.03;
 const PANEL_ADM_PROMPT_BASE_Z = 0.04;
 const PANEL_BRUSH_CURSOR_BASE_Z = 0.025;
-const MAX_OPTIONS_OFFSET_X = 0.9;
-const MAX_OPTIONS_OFFSET_Y = 0.65;
+const OPTIONS_WINDOW_GAP = OPTIONS_WINDOW_MARGIN;
+
+function controlRowWidth(count) {
+  return count * CONTROL_BUTTON_SIZE + Math.max(0, count - 1) * CONTROL_BUTTON_GAP;
+}
+
 const EDITOR_ACTIONS = [
   ["Eraser", "mask-erase"],
   ["Auto Mask", "mask-auto"],
@@ -336,20 +348,20 @@ export class PanelView extends THREE.Group {
     this.ambientIntensity = 0.5;
     this.surfaceFlatGeometry = null;
     this.admPromptVisible = false;
-    this.sceneTransitionActive = false;
-    this.sceneTransitionInteractiveStates = new Map();
     this.optionsOpen = false;
     this.uiVisible = true;
     this.zenMode = false;
     this.mediaTagIds = [];
     this.tagDefinitions = [];
-    this.tagListExpanded = true;
+    this.tagListExpanded = false;
     this.saveMode = "scale";
     this.numberBadgeSignature = "";
     this.contentLayoutSignature = "";
+    this.videoControlSignature = "";
+    this.videoPlayButton = null;
     this.depthGeometryState = null;
-    this.optionsOffset = { x: 0, y: 0 };
-    this.optionsScale = 1;
+    this.optionsPlaced = false;
+    this.optionsWindowPlaced = false;
     this.activeViewCamera = null;
     this.scratchUiWorldPosition = new THREE.Vector3();
     this.scratchUiParentQuaternion = new THREE.Quaternion();
@@ -450,9 +462,7 @@ export class PanelView extends THREE.Group {
     this.slideshowTags.name = "slideshow-tags";
     this.uiRoot.add(this.slideshowTags);
     this.slideshowTagsSignature = "";
-    this.optionsPanel = new PanelOptionsView(this.panel.id, {
-      onDrag: (gesture) => this.#handleOptionsDrag(gesture),
-    });
+    this.optionsPanel = new PanelOptionsView(this.panel.id);
     this.uiRoot.add(this.optionsPanel);
     this.#createAdmControls();
     this.editorControls = new THREE.Group();
@@ -525,6 +535,7 @@ export class PanelView extends THREE.Group {
     this.overlayScene = null;
     this.optionsWindow?.dispose();
     this.optionsWindow = null;
+    this.optionsWindowPlaced = false;
     this.uiBillboards = [
       this.numberBadge,
       this.controls,
@@ -535,7 +546,7 @@ export class PanelView extends THREE.Group {
   }
 
   #createControls() {
-    for (const [index, [label, action, font]] of CONTROL_DEFINITIONS.entries()) {
+    for (const [label, action, font, videoOnly] of CONTROL_DEFINITIONS) {
       const button = makeButton(label, action, {
         width: CONTROL_BUTTON_SIZE,
         height: CONTROL_BUTTON_SIZE,
@@ -545,18 +556,105 @@ export class PanelView extends THREE.Group {
         font,
         padding: 0,
       });
-      button.position.set(
-        (index - (CONTROL_DEFINITIONS.length - 1) / 2) * (CONTROL_BUTTON_SIZE + CONTROL_BUTTON_GAP),
-        0,
-        0.015,
-      );
+      button.position.set(0, 0, 0.015);
       button.userData.panelId = this.panel.id;
       button.userData.gestureTarget = false;
+      button.userData.videoControl = Boolean(videoOnly);
       this.controls.add(button);
     }
+    this.videoPlayButton = this.controls.children.find(
+      (control) => control.userData.action === "toggle-video-playback",
+    ) ?? null;
   }
 
-  #refreshOptionsPanel(width = this.panel?.dimensions?.width ?? 1.2, height = this.panel?.dimensions?.height ?? 0.8) {
+  #panelSize() {
+    const minimized = Boolean(this.panel?.minimized);
+    return {
+      width: minimized
+        ? 0.3
+        : this.panel?.width ?? this.panel?.dimensions?.width ?? this.panel?.size?.width ?? 0.95,
+      height: minimized
+        ? 0.18
+        : this.panel?.height ?? this.panel?.dimensions?.height ?? this.panel?.size?.height ?? 0.58,
+    };
+  }
+
+  /** Video transport controls exist only while the panel actually shows a video. */
+  #videoControlsVisible() {
+    return this.mediaType === "video" && this.mediaLoaded;
+  }
+
+  /**
+   * Centers the row on the controls that apply right now and rescales it to the
+   * panel width, so the video transport buttons do not leave a gap in the row
+   * when the panel shows an image. Layout can change between state updates, so
+   * only the overlay anchor's scale is mirrored here: its position already
+   * tracks the panel, and copying the overlay group's world position back into
+   * the anchor would move the row every frame.
+   */
+  #layoutControls(panelWidth = this.#panelSize().width) {
+    const videoVisible = this.#videoControlsVisible();
+    const shown = this.controls.children.filter(
+      (control) => videoVisible || !control.userData.videoControl,
+    );
+    const step = CONTROL_BUTTON_SIZE + CONTROL_BUTTON_GAP;
+    for (const control of this.controls.children) {
+      control.visible = videoVisible || !control.userData.videoControl;
+    }
+    const span = (shown.length - 1) / 2;
+    for (const [index, control] of shown.entries()) {
+      control.position.x = (index - span) * step;
+    }
+    const scale = Math.min(
+      1,
+      Math.max(MIN_CONTROL_SCALE, (panelWidth - 0.025) / controlRowWidth(shown.length)),
+    );
+    this.controls.scale.setScalar(scale);
+    this.overlayAnchors.get(this.controls)?.scale.copy(this.controls.scale);
+  }
+
+  /**
+   * Keeps the video transport row in step with the loaded media and the
+   * current playback state. Cheap enough to run every frame: it only relayouts
+   * when visibility or the play/pause glyph actually changed.
+   */
+  #syncVideoControls(panelWidth) {
+    const visible = this.#videoControlsVisible();
+    const playing = visible && this.mediaTexture.isPlaying();
+    const signature = `${visible}:${playing}`;
+    if (signature === this.videoControlSignature) return;
+    this.videoControlSignature = signature;
+    this.#layoutControls(panelWidth);
+    if (this.videoPlayButton) {
+      setButtonLabel(this.videoPlayButton, playing ? VIDEO_PAUSE_GLYPH : VIDEO_PLAY_GLYPH);
+    }
+    this.#updateControlStates();
+  }
+
+  /**
+   * Starts or pauses the panel's video. Returns true when the video is now
+   * playing. Images are never affected: they answer with false.
+   */
+  toggleVideoPlayback() {
+    if (!this.#videoControlsVisible() || !this.mediaTexture.video) return false;
+    if (this.mediaTexture.isPlaying()) this.mediaTexture.pause();
+    else this.mediaTexture.play().catch(this.callbacks.onError);
+    this.#syncVideoControls();
+    return this.mediaTexture.isPlaying();
+  }
+
+  /**
+   * Skips the panel's video by a relative number of seconds without changing its
+   * play state. Returns the applied position, or null when nothing was seeked.
+   */
+  seekVideo(deltaSeconds) {
+    if (!this.#videoControlsVisible()) return null;
+    const target = this.mediaTexture.seekBy(deltaSeconds);
+    this.#syncVideoControls();
+    return target;
+  }
+
+  #refreshOptionsPanel() {
     const admSettings = this.#currentAdmSettings();
     if (this.overlayScene) {
       this.#syncOptionsWindow(admSettings);
@@ -573,7 +671,6 @@ export class PanelView extends THREE.Group {
       depthOffset: PANEL_OPTIONS_BASE_Z + this.#uiDepthOffset(),
       admSettings,
     });
-    this.#layoutOptionsPanel(width, height);
     if (rebuilt) this.#updateControlStates();
   }
 
@@ -630,32 +727,8 @@ export class PanelView extends THREE.Group {
   #syncOptionsWindowVisibility() {
     if (!this.optionsWindow) return;
     const visible = Boolean(this.overlayScene) && this.#optionsChromeVisible();
-    if (visible) {
-      this.optionsWindow.setPositionIfUnset(this.#defaultOptionsWindowPosition());
-    }
     this.optionsWindow.setVisible(visible);
-  }
-
-  #defaultOptionsWindowPosition() {
-    const host = this.optionsWindow?.host;
-    const hostRect = host instanceof Element ? host.getBoundingClientRect() : null;
-    const width = hostRect?.width || window.innerWidth;
-    const height = hostRect?.height || window.innerHeight;
-    if (this.activeViewCamera) {
-      this.updateMatrixWorld(true);
-      this.scratchUiWorldPosition.set(0, 0, 0).applyMatrix4(this.matrixWorld);
-      this.scratchUiWorldPosition.project(this.activeViewCamera);
-      const x = Math.round(((this.scratchUiWorldPosition.x + 1) / 2) * width) + 130;
-      const y = Math.round(((1 - this.scratchUiWorldPosition.y) / 2) * height) - 40;
-      return {
-        x: clampNumber(x, 8, Math.max(8, width - 340)),
-        y: clampNumber(y, 8, Math.max(8, height - 260)),
-      };
-    }
-    return {
-      x: Math.round(width * 0.6),
-      y: Math.round(height * 0.2),
-    };
+    if (visible) this.#syncOptionsWindowPosition();
   }
 
   #createEditorControls() {
@@ -867,10 +940,7 @@ export class PanelView extends THREE.Group {
     this.depthIntensity = Math.max(0, Math.min(3, Number(panel.depthIntensity) || 0.35));
     const minimized = Boolean(panel.minimized);
     if (minimized) this.optionsOpen = false;
-    const width =
-      minimized ? 0.3 : panel.width ?? panel.dimensions?.width ?? panel.size?.width ?? 0.95;
-    const height =
-      minimized ? 0.18 : panel.height ?? panel.dimensions?.height ?? panel.size?.height ?? 0.58;
+    const { width, height } = this.#panelSize();
     this.frame.scale.set(width + 0.025, height + 0.025, 1);
     this.numberBadge.position.set(-width / 2 + 0.08, height / 2 - 0.04, PANEL_NUMBER_BADGE_BASE_Z);
     const numberBadgeSignature = `${panel.number ?? "?"}:${panel.color ?? "#9be7b5"}`;
@@ -888,9 +958,8 @@ export class PanelView extends THREE.Group {
       this.numberBadge.material.needsUpdate = true;
     }
     this.controls.visible = this.uiVisible && !minimized && Boolean(panel.focused ?? true);
-    const controlScale = Math.min(1, Math.max(0.42, (width - 0.025) / CONTROL_ROW_WIDTH));
-    this.controls.scale.setScalar(controlScale);
     this.controls.position.set(0, height / 2 + 0.09, PANEL_CONTROLS_BASE_Z);
+    this.#layoutControls(width);
     this.#syncAnchorXYScale(this.controls);
     this.depthSlider.setValue(this.depthIntensity);
     this.editorControls.scale.setScalar(Math.min(1, Math.max(0.35, (width - 0.02) / 0.78)));
@@ -918,7 +987,8 @@ export class PanelView extends THREE.Group {
 
     this.#updateControlStates();
     this.#applyDepthGeometry();
-    this.#refreshOptionsPanel(width, height);
+    this.#refreshOptionsPanel();
+    this.#placeOptionsPanel(width, height);
     this.#applyOptionsVisibility();
 
     this.#applyContentTransform(width, height);
@@ -1014,6 +1084,7 @@ export class PanelView extends THREE.Group {
     this.mediaSize = null;
     this.mediaLoaded = false;
     this.#updateControlStates();
+    this.#syncVideoControls();
     const previousMap = this.surface.material.map;
     try {
       const result = await this.mediaTexture.load(item, url, options);
@@ -1030,10 +1101,7 @@ export class PanelView extends THREE.Group {
         width: result.naturalWidth ?? result.width,
         height: result.naturalHeight ?? result.height,
       };
-      const width = this.panel.minimized
-        ? 0.3 : this.panel.width ?? this.panel.dimensions?.width ?? this.panel.size?.width ?? 0.95;
-      const height = this.panel.minimized
-        ? 0.18 : this.panel.height ?? this.panel.dimensions?.height ?? this.panel.size?.height ?? 0.58;
+      const { width, height } = this.#panelSize();
       this.#applyContentTransform(width, height);
       this.#applyDepthGeometry();
       this.#applyDepthEffects();
@@ -1042,8 +1110,10 @@ export class PanelView extends THREE.Group {
           this.callbacks.onVideoEnded?.(this.panel.id);
         });
       }
+      this.#syncVideoControls();
       return result;
     } catch (error) {
+      this.#syncVideoControls();
       this.callbacks.onError?.(error);
       return null;
     }
@@ -1225,17 +1295,19 @@ export class PanelView extends THREE.Group {
   }
 
   #updateControlStates() {
-        for (const control of this.controls.children) {
-          if (!control.material?.color) continue;
-          const action = control.userData.action;
-          const inactive = this.admPromptVisible;
-          const tagInactive = false;
-          const active =
-            (action === "toggle-lock" && this.panel.locked) ||
-            (action === "toggle-options" && this.optionsOpen) ||
-            (action === "toggle-slideshow" && this.panel.slideshow?.playing);
-          control.material.color.set((inactive || tagInactive) ? 0x5f6b67 : active ? 0xaaf1c3 : 0xffffff);
-        }
+    for (const control of this.controls.children) {
+      if (!control.material?.color) continue;
+      const action = control.userData.action;
+      const inactive = this.admPromptVisible;
+      const tagInactive = false;
+      const active =
+        (action === "toggle-lock" && this.panel.locked) ||
+        (action === "toggle-options" && this.optionsOpen) ||
+        (action === "toggle-slideshow" && this.panel.slideshow?.playing) ||
+        (action === "toggle-video-playback" && this.mediaTexture.isPlaying());
+      control.material.color.set((inactive || tagInactive) ? 0x5f6b67 : active ? 0xaaf1c3 : 0xffffff);
+    }
+
         const optionsState = {
           maskAvailable: this.maskAvailable,
           mediaLoaded: this.mediaLoaded,
@@ -1480,37 +1552,57 @@ export class PanelView extends THREE.Group {
     if (anchor) anchor.position.z = z;
   }
 
-  #layoutOptionsPanel(width = this.panel?.dimensions?.width ?? 1.2, height = this.panel?.dimensions?.height ?? 0.8) {
-    const defaultX = width / 2 + this.optionsPanel.layout.width / 2 + 0.09;
-    const defaultY = height / 2 - this.optionsPanel.layout.height / 2 + 0.04;
-    const clampX = width / 2 + MAX_OPTIONS_OFFSET_X;
-    const clampY = height / 2 + MAX_OPTIONS_OFFSET_Y;
-    this.optionsOffset.x = Math.max(-clampX, Math.min(clampX, this.optionsOffset.x));
-    this.optionsOffset.y = Math.max(-clampY, Math.min(clampY, this.optionsOffset.y));
-    this.optionsPanel.position.x = defaultX + this.optionsOffset.x;
-    this.optionsPanel.position.y = defaultY + this.optionsOffset.y;
-    const optionsAnchor = this.overlayAnchors.get(this.optionsPanel);
-    if (optionsAnchor) {
-      optionsAnchor.position.copy(this.optionsPanel.position);
-    }
+  /**
+   * Places the options window beside the panel once. After that it stays where
+   * the user dragged it: it is a child of the panel, so panel movement carries
+   * it along and no re-layout may move it back.
+   */
+  #placeOptionsPanel(width, height) {
+    if (this.optionsPlaced) return;
+    this.optionsPlaced = true;
+    this.optionsPanel.position.set(
+      width / 2 + this.optionsPanel.layout.width / 2 + 0.09,
+      height / 2 - OPTIONS_TOP_EDGE - 0.02,
+      this.optionsPanel.position.z,
+    );
+    this.#syncAnchorXYScale(this.optionsPanel);
   }
 
-  #handleOptionsDrag(gesture) {
-    if (gesture?.hands === 2) {
-      const scale = Number(gesture.scale);
-      if (!Number.isFinite(scale) || scale <= 0 || scale === 1) return;
-      this.optionsScale = clampOptionsScale(this.optionsScale * scale);
-      this.optionsPanel.scale.setScalar(this.optionsScale);
-      return;
+  /**
+   * Projects the panel into the options window host so the window stays attached
+   * to its panel: it is drawn at its stored offset from the panel center, so
+   * dragging the panel carries the window along. The first placement sits beside
+   * the panel's right edge at any panel or viewport size.
+   */
+  #syncOptionsWindowPosition() {
+    const optionsWindow = this.optionsWindow;
+    if (!optionsWindow || optionsWindow.element.hidden || !this.activeViewCamera) return;
+    const host = optionsWindow.host;
+    const hostRect = host instanceof Element ? host.getBoundingClientRect() : null;
+    const width = hostRect?.width || window.innerWidth;
+    const height = hostRect?.height || window.innerHeight;
+    const camera = this.activeViewCamera;
+    const { width: panelWidth, height: panelHeight } = this.#panelSize();
+    this.updateMatrixWorld(true);
+    const project = (x, y) => {
+      this.scratchUiWorldPosition.set(x, y, 0).applyMatrix4(this.matrixWorld).project(camera);
+      return {
+        x: ((this.scratchUiWorldPosition.x + 1) / 2) * width,
+        y: ((1 - this.scratchUiWorldPosition.y) / 2) * height,
+      };
+    };
+    const center = project(0, 0);
+    if (!this.optionsWindowPlaced) {
+      this.optionsWindowPlaced = true;
+      const corner = project(panelWidth / 2, panelHeight / 2);
+      // Beside the panel's right edge and near the top of the host, so the
+      // window still has room to be dragged in both directions afterwards.
+      optionsWindow.moveTo({
+        x: corner.x - center.x + OPTIONS_WINDOW_GAP,
+        y: OPTIONS_WINDOW_GAP - center.y,
+      });
     }
-    if (gesture?.hands !== 1 || !gesture?.translation) return;
-    this.optionsOffset.x += Number(gesture.translation.x) || 0;
-    this.optionsOffset.y += Number(gesture.translation.y) || 0;
-    const width = this.panel.minimized
-      ? 0.3 : this.panel.width ?? this.panel.dimensions?.width ?? this.panel.size?.width ?? 0.95;
-    const height = this.panel.minimized
-      ? 0.18 : this.panel.height ?? this.panel.dimensions?.height ?? this.panel.size?.height ?? 0.58;
-    this.#layoutOptionsPanel(width, height);
+    optionsWindow.follow(center);
   }
 
   /** Copies current group local transforms to their overlay anchors after applyState updates them. */
@@ -1752,13 +1844,7 @@ export class PanelView extends THREE.Group {
       this.callbacks.onAction?.(this.panel.id, (uv?.x ?? 0.5) < 0.5 ? "previous" : "next");
       return;
     }
-    if (this.mediaTexture.video) {
-      if (this.mediaTexture.video.paused) {
-        this.mediaTexture.play().catch(this.callbacks.onError);
-      } else {
-        this.mediaTexture.pause();
-      }
-    }
+    this.toggleVideoPlayback();
   }
 
   #queueImageTap(uv) {
@@ -1810,6 +1896,8 @@ export class PanelView extends THREE.Group {
 
   tick(time, camera = this.activeViewCamera) {
     this.#alignUiToCamera(camera);
+    this.#syncVideoControls();
+    this.#syncOptionsWindowPosition();
     if (this.overlayScene) this.#syncOverlayGroups(camera);
     this.#applyDepthEffects();
     if (!this.editorActive || !this.autoMaskBusy) return;
@@ -1826,86 +1914,4 @@ export class PanelView extends THREE.Group {
     }
   }
 
-  applySceneTransition(transition, progress) {
-    const alpha = Math.max(0, Math.min(1, Number(progress) || 0));
-    const from = transition?.from;
-    const to = transition?.to;
-    if (from?.transform && to?.transform) {
-      const fromQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(
-        from.transform.rotation.x,
-        from.transform.rotation.y,
-        from.transform.rotation.z,
-      ));
-      const toQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(
-        to.transform.rotation.x,
-        to.transform.rotation.y,
-        to.transform.rotation.z,
-      ));
-      const rotation = new THREE.Euler().setFromQuaternion(
-        fromQuaternion.slerp(toQuaternion, alpha),
-      );
-      const blended = {
-        ...this.panel,
-        transform: {
-          position: {
-            x: from.transform.position.x + (to.transform.position.x - from.transform.position.x) * alpha,
-            y: from.transform.position.y + (to.transform.position.y - from.transform.position.y) * alpha,
-            z: from.transform.position.z + (to.transform.position.z - from.transform.position.z) * alpha,
-          },
-          rotation: {
-            x: rotation.x,
-            y: rotation.y,
-            z: rotation.z,
-          },
-        },
-        dimensions: {
-          width: from.dimensions.width + (to.dimensions.width - from.dimensions.width) * alpha,
-          height: from.dimensions.height + (to.dimensions.height - from.dimensions.height) * alpha,
-        },
-      };
-      this.applyState(blended);
-    }
-    const opacity = (transition?.fromAlpha ?? 1) + ((transition?.toAlpha ?? 1) - (transition?.fromAlpha ?? 1)) * alpha;
-    this.#setOpacity(opacity);
-    this.traverse((object) => {
-      if (!Object.prototype.hasOwnProperty.call(object.userData ?? {}, "interactive")) return;
-      if (!this.sceneTransitionInteractiveStates.has(object)) {
-        this.sceneTransitionInteractiveStates.set(object, object.userData.interactive);
-      }
-      object.userData.interactive = false;
-    });
-    this.sceneTransitionActive = true;
-  }
-
-  clearSceneTransition() {
-    if (!this.sceneTransitionActive) return;
-    this.sceneTransitionActive = false;
-    this.#setOpacity(1);
-    for (const [object, interactive] of this.sceneTransitionInteractiveStates) {
-      object.userData.interactive = interactive;
-    }
-    this.sceneTransitionInteractiveStates.clear();
-  }
-
-  #setOpacity(alpha) {
-    const clamped = Math.max(0, Math.min(1, Number(alpha) || 0));
-    this.traverse((object) => {
-      const materials = Array.isArray(object.material)
-        ? object.material
-        : object.material
-          ? [object.material]
-          : [];
-      for (const material of materials) {
-        if (!material || typeof material !== "object") continue;
-        if (!Object.prototype.hasOwnProperty.call(material.userData ?? {}, "baseOpacity")) {
-          material.userData = material.userData ?? {};
-          material.userData.baseOpacity = Number.isFinite(material.opacity) ? material.opacity : 1;
-        }
-        const baseOpacity = material.userData.baseOpacity;
-        material.transparent = clamped < 1 || baseOpacity < 1 || Boolean(material.transparent);
-        material.opacity = baseOpacity * clamped;
-        material.needsUpdate = true;
-      }
-    });
-  }
 }

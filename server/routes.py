@@ -18,7 +18,6 @@ from .auto_mask import AutoMaskGenerator, AutoMaskService
 from .commentary import COMMENTARY_TYPES, commentary_entries, commentary_type, resolve_commentary_file
 from .depth_maps import MAX_DEPTH_MAP_BYTES, DepthMapStore
 from .media import TTS_WORK_DIRNAME, content_type, file_etag, is_allowed, is_internal_path, is_media, media_type, media_url, metadata, parse_included_dirs, poster_cache_variants, relative_text, resolve_under_root
-from .scenes import SceneStore
 from .masks import MAX_MASK_BYTES, MaskStore
 from .tags import DEFAULT_ADM_DEPTH_INTENSITY, TagStore
 from .thumbnails import POSTER_TIME_MAX, POSTER_TIME_MIN, create_thumbnail
@@ -162,7 +161,6 @@ def add_routes(
     app.state.auto_depth_service = auto_depth
     app.state.commentary_tts = tts
     tags = TagStore(root)
-    scenes = SceneStore(root)
 
     @app.get("/api/health")
     def health() -> dict:
@@ -396,25 +394,6 @@ def add_routes(
             seen_paths.add(canonical_path)
             assignments.append((relative, assignment["tag_ids"]))
         return _no_store({"assignments": tags.replace_assignments(assignments)})
-
-    @app.get("/api/scenes")
-    def list_scenes() -> Response:
-        return _no_store(scenes.list_scenes())
-
-    @app.post("/api/scenes", status_code=201)
-    async def create_scene(request: Request) -> Response:
-        body = await _json_object(request)
-        _require_exact_keys(body, {"name"})
-        return _no_store(scenes.create_scene(body["name"]), status_code=201)
-
-    @app.get("/api/scenes/{scene_id}")
-    def get_scene(scene_id: str) -> Response:
-        return _no_store(scenes.get_scene(scene_id))
-
-    @app.put("/api/scenes/{scene_id}")
-    async def put_scene(scene_id: str, request: Request) -> Response:
-        body = await _json_object(request)
-        return _no_store(scenes.replace_scene(scene_id, body))
 
     @app.get("/api/commentary")
     def list_commentary() -> Response:

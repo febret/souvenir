@@ -2,7 +2,13 @@ import * as THREE from "three";
 
 import { disposeObject } from "./canvas-ui.js";
 
-import { PANEL_WIDTH } from "./panel-options/constants.js";
+import {
+  OPTIONS_SCALE_MAX,
+  OPTIONS_SCALE_MIN,
+  PANEL_WIDTH,
+  clampOptionsScale,
+  optionsWidth,
+} from "./panel-options/constants.js";
 import { computeSignature } from "./panel-options/signature.js";
 import { computeLayout, computeBounds } from "./panel-options/layout.js";
 import {
@@ -21,25 +27,61 @@ import { applyControlStates } from "./panel-options/control-states.js";
 /**
  * Owns the dynamic options chrome for one panel. The group is rebuilt only when
  * layout, save mode, tag definitions, or tag selection changes.
+ *
+ * The window is a child of its panel, so panel movement carries it along, and
+ * it is dragged with the same absolute ray gesture the main toolbar uses. The
+ * chrome is billboarded to face the viewer and its depth belongs to the panel's
+ * UI depth offset, so a gesture only slides and rescales it.
  */
 export class PanelOptionsView extends THREE.Group {
-  constructor(panelId, { onDrag = null } = {}) {
+  constructor(panelId) {
     super();
     this.panelId = panelId;
     this.signature = "";
     this.name = "panel-options";
     this.visible = false;
-    this.onDrag = onDrag;
+    this.interactionTarget = {
+      type: "panel-options",
+      onGesture: (gesture) => this.applyGesture(gesture),
+    };
+    this.userData.gestureTarget = this.interactionTarget;
+    this.userData.manipulation = {
+      type: "options",
+      scalable: true,
+      scaleLimits: { min: OPTIONS_SCALE_MIN, max: OPTIONS_SCALE_MAX },
+    };
     this.content = new THREE.Group();
     this.add(this.content);
     this.depthControl = null;
-    this.dragTarget = {
-      onGesture: (gesture) => this.onDrag?.(gesture),
-    };
     this.layout = {
       width: PANEL_WIDTH,
       height: 0.5,
     };
+  }
+
+  /**
+   * Slides and rescales the window in the panel's local space. The absolute pose
+   * keeps the grabbed point under the hand ray, so the window tracks the ray
+   * instead of accumulating frame-to-frame deltas.
+   */
+  applyGesture(gesture) {
+    const position = gesture?.absolutePose?.position;
+    if (position) {
+      if (Number.isFinite(position.x)) this.position.x = position.x;
+      if (Number.isFinite(position.y)) this.position.y = position.y;
+      const requested = gesture.absoluteObjectScale ?? gesture.scaleFactor;
+      const absolute = typeof requested === "number" ? requested : requested?.x;
+      if (Number.isFinite(absolute) && absolute > 0) this.scale.setScalar(clampOptionsScale(absolute));
+      return;
+    }
+    if (gesture?.hands === 2 && Number.isFinite(gesture?.scale)) {
+      this.scale.setScalar(clampOptionsScale(this.scale.x * gesture.scale));
+      return;
+    }
+    if (gesture?.hands !== 1) return;
+    const translation = gesture.translation ?? {};
+    if (Number.isFinite(translation.x)) this.position.x += translation.x;
+    if (Number.isFinite(translation.y)) this.position.y += translation.y;
   }
 
   setDepthControl(control) {
@@ -56,7 +98,7 @@ export class PanelOptionsView extends THREE.Group {
     slideshowRepeat = "all",
     tagDefinitions,
     mediaTagIds,
-    tagListExpanded = true,
+    tagListExpanded = false,
     depthOffset,
     admSettings,
   }) {
@@ -129,9 +171,9 @@ export class PanelOptionsView extends THREE.Group {
       tagsMinY,
       expandedTags,
     });
-    addBackdrop(this.content, bounds, { dragTarget: this.dragTarget, expandedTags });
+    addBackdrop(this.content, bounds, { expandedTags });
 
-    this.layout = { width: PANEL_WIDTH, height: bounds.height };
+    this.layout = { width: optionsWidth(expandedTags), height: bounds.height };
     this.position.z = depthOffset;
     return true;
   }

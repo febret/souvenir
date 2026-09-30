@@ -83,6 +83,9 @@ fixed size versions of a panel can be moved around like panels but cannot be res
 Touching a thumbnail expands it back to a full panel.
 - 🍿(slideshow): starts / stops a slideshow on this panel. Media is played back 
 in the last selected sort order. 
+- ▶️/⏸(video play/pause), -15s and +15s: shown only while the panel displays a
+video. They start or pause that video and skip it 15 seconds backwards or
+forwards without changing its play state.
 - 🔍(lock/unlock zoom): when toggled, zoom actions on the panel (ie two hand 
 pinch-zoom) zoom the panel's content 
 

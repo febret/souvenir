@@ -5,6 +5,7 @@ import {
   ENVIRONMENT_MODE_LABELS,
   normalizeEnvironmentMode,
 } from "../core/environment-mode.js";
+import { MAX_SNAPSHOTS } from "../core/snapshots.js";
 import {
   disposeObject,
   markInteractive,
@@ -15,19 +16,20 @@ import {
 } from "./canvas-ui.js";
 
 export const TOOLBAR_WIDTH = 1.08;
-export const TOOLBAR_HEIGHT = 0.3;
+export const TOOLBAR_HEIGHT = 0.44;
 export const TOOLBAR_TEXTURE_RESOLUTION = 2;
 const TOOLBAR_TITLE = "PANELS";
 const MENU_WIDTH = 0.46;
 const MENU_HEIGHT = 0.49;
+const SNAPSHOT_ROW_Y = -0.18;
 
 function makeToolbarTexture() {
   return makeCanvasTexture({
     width: 1200,
-    height: 360,
+    height: 490,
     resolutionScale: TOOLBAR_TEXTURE_RESOLUTION,
     draw(context, canvas) {
-      const titleHeight = 78;
+      const titleHeight = 104;
 
       context.clearRect(0, 0, canvas.width, canvas.height);
       roundedRect(context, 3, 3, canvas.width - 6, canvas.height - 6, 24);
@@ -170,14 +172,29 @@ export class SpatialToolbar extends THREE.Group {
     exposeTextureSize(this.environmentButton);
     this.controls.add(this.environmentButton);
 
+    this.snapshotButton = makeButton("Snapshot", "capture-snapshot", {
+      width: 0.16,
+      height: 0.055,
+      textureResolutionScale: TOOLBAR_TEXTURE_RESOLUTION,
+    });
+    this.snapshotButton.position.set(-0.4, SNAPSHOT_ROW_Y, 0);
+    this.snapshotButton.userData.gestureTarget = false;
+    exposeTextureSize(this.snapshotButton);
+    this.controls.add(this.snapshotButton);
+
+    this.snapshotStrip = new THREE.Group();
+    this.snapshotStrip.position.set(-0.28, SNAPSHOT_ROW_Y, 0);
+    this.controls.add(this.snapshotStrip);
+
     this.environmentMenu = this.#createEnvironmentMenu();
-    this.environmentMenu.position.set(0, -0.44, 0.015);
+    this.environmentMenu.position.set(0, -0.55, 0.015);
     this.environmentMenu.visible = false;
     this.add(this.environmentMenu);
 
     this.setEnvironmentMode(this.environmentMode);
     this.setCommentaryState({ available: false, enabled: false, playing: false });
     this.setPanels([], null);
+    this.setSnapshots([], null);
     this.setZenMode(false);
   }
 
@@ -268,6 +285,37 @@ export class SpatialToolbar extends THREE.Group {
     }
     this.removeButton.userData.interactive = Boolean(this.focusedPanelId);
     this.removeButton.material.color.set(this.focusedPanelId ? 0xffffff : 0x66716d);
+  }
+
+  setSnapshots(slots, selectedIndex) {
+    this.snapshotSlots = Array.isArray(slots) ? slots.slice(0, MAX_SNAPSHOTS) : [];
+    this.selectedSnapshotIndex = Number.isInteger(selectedIndex) ? selectedIndex : null;
+    disposeObject(this.snapshotStrip);
+    this.snapshotStrip.clear();
+    const pillWidth = 0.06;
+    const spacing = 0.066;
+    for (let index = 0; index < MAX_SNAPSHOTS; index += 1) {
+      const filled = Boolean(this.snapshotSlots[index]);
+      const active = index === this.selectedSnapshotIndex;
+      const button = makeButton(String(index + 1), `select-snapshot:${index}`, {
+        width: pillWidth,
+        height: 0.05,
+        textureWidth: 220,
+        background: filled ? "#3b564d" : "#182321",
+        border: active ? "#eafff2" : filled ? "#1d2926" : "#2a3835",
+        foreground: filled ? "#eaf3ef" : "#5f6f6a",
+        textureResolutionScale: TOOLBAR_TEXTURE_RESOLUTION,
+      });
+      button.position.set(index * spacing, 0, 0);
+      button.userData.gestureTarget = false;
+      button.userData.snapshotIndex = index;
+      button.userData.filled = filled;
+      if (filled) button.userData.holdAction = `clear-snapshot:${index}`;
+      exposeTextureSize(button);
+      this.snapshotStrip.add(button);
+    }
+    setButtonState(this.snapshotButton, { active: this.selectedSnapshotIndex !== null });
+    return this.snapshotSlots.length;
   }
 
   setZenMode(enabled) {

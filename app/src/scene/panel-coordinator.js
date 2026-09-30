@@ -24,6 +24,7 @@ import {
   shouldReplayAdvance,
   slideshowTransition,
   sortMedia,
+  VIDEO_SEEK_STEP_SECONDS,
 } from "../core/index.js";
 import { loadLayout, saveLayout } from "./layout-storage.js";
 import { MediaBrowserView } from "./media-browser-view.js";
@@ -408,6 +409,12 @@ export class PanelCoordinator {
       this.clonePanel(panelId);
     } else if (action === "toggle-slideshow") {
       this.toggleSlideshow(panel);
+    } else if (action === "toggle-video-playback") {
+      this.panelViews.get(panel.id)?.toggleVideoPlayback();
+    } else if (action === "seek-video-forward") {
+      this.panelViews.get(panel.id)?.seekVideo(VIDEO_SEEK_STEP_SECONDS);
+    } else if (action === "seek-video-backward") {
+      this.panelViews.get(panel.id)?.seekVideo(-VIDEO_SEEK_STEP_SECONDS);
     } else if (action === "toggle-mask") {
       this.maskWorkflow.toggleMask(panel);
     } else if (action === "toggle-3d-mode") {
@@ -551,8 +558,12 @@ export class PanelCoordinator {
 
   #syncSlideshowOptions(panel) {
     const runtime = this.runtimeFor(panel.id);
+    const { slideshowIntervalMs } = this.getSettings();
     runtime.slideshow = {
       ...runtime.slideshow,
+      intervalMs: Number.isFinite(slideshowIntervalMs)
+        ? slideshowIntervalMs
+        : runtime.slideshow.intervalMs,
       shuffle: Boolean(panel.slideshowShuffle),
       repeat: normalizeRepeatMode(panel.slideshowRepeat),
     };
@@ -578,6 +589,21 @@ export class PanelCoordinator {
       }
     }
     this.reconcile(this.panelState, { type: "panel", panelIds: [panel.id] });
+  }
+
+  /**
+   * Stops every panel's slideshow without changing its current media. Used
+   * before restoring a snapshot, which never records active playback.
+   */
+  stopAllSlideshows() {
+    for (const runtime of this.runtime.values()) {
+      if (runtime.slideshow?.active) {
+        runtime.slideshow = slideshowTransition(
+          runtime.slideshow,
+          { type: "stop", now: performance.now() },
+        ).state;
+      }
+    }
   }
 
   videoEnded(panelId) {
@@ -708,25 +734,6 @@ export class PanelCoordinator {
     } else if (mode === "panel-rescale" && gesture.hands === 2 && !panel.minimized) {
       this.store.setDimensions(target, next.dimensions);
     }
-  }
-
-  applyScenePanelSnapshot(snapshot) {
-    const panel = this.getPanel(snapshot.id);
-    if (!panel) {
-      this.store.add({
-        id: snapshot.id,
-        media: { ...snapshot.media },
-        transform: { ...snapshot.transform },
-        dimensions: { ...snapshot.dimensions },
-      });
-      return;
-    }
-    this.store.setDirectory(snapshot.id, snapshot.media.directory);
-    this.store.setSort(snapshot.id, snapshot.media.sort);
-    this.store.setView(snapshot.id, snapshot.media.view);
-    this.store.setMedia(snapshot.id, snapshot.media.selectedId);
-    this.store.setTransform(snapshot.id, snapshot.transform);
-    this.store.setDimensions(snapshot.id, snapshot.dimensions);
   }
 
   setZenMode(enabled) {

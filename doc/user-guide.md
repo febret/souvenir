@@ -243,9 +243,11 @@ preview, to return to the Portal.
 
 The **Tag your memories** button on the Portal opens the full-screen tagging
 mode: a 3×3 grid of the least-tagged pictures and videos from your selected
-folders. The current tag is shown at the top; click the cells that match it,
-then choose **Next tag →** to move to the next tag. Once every tag has been
-applied to a batch, the batch is saved and the next batch loads.
+folders. The current tag is shown at the top; click the cells that match it.
+Choosing **Next tag →** applies the grid's tag assignments to the server
+immediately before showing the next tag, so your progress is saved even if you
+leave before finishing every tag. Once every tag has been applied to a batch,
+the batch is saved and the next batch loads.
 
 The header's **Max tags** toggle restricts the grid to pictures and videos that
 currently have **one or fewer tags**, so you can focus on unfinished items.
@@ -278,6 +280,8 @@ Souvenir needs no controllers:
   scales it at the same time, like holding a physical frame by two corners.
 - On a locked panel, one-hand movement pans its content and a two-hand gesture
   zooms the content instead.
+- Pinch and drag an empty part of the panel's **OPTIONS** window to move it. The
+  window belongs to its panel, so moving the panel carries the window along.
 - Pinch two points on a panel's **OPTIONS** window with both hands to rescale
   that window without moving it.
 
@@ -293,11 +297,35 @@ The high-resolution **PANEL CONTROLS** window below the gallery contains:
 - **Set Environment** opens the environment chooser.
 - **Commentary** enables or disables tag-aware commentary playback. It is
   disabled when the server has no commentary sounds.
+- **Snapshot** saves the current scene into a numbered slot, and the eight
+  numbered buttons beside it select or update those snapshots.
 
 Pinch and drag an empty part of its title bar/background to move and reorient
 the window. In desktop preview, pointer-drag the title bar. Dragging action
 controls does not move the window; the buttons remain selectable after the
 window has been relocated.
+
+### Save and recall scene snapshots
+
+The **Snapshot** button on the PANEL CONTROLS window saves the whole scene so
+you can rebuild an arrangement later:
+
+1. Arrange your panels, media, and settings.
+2. Point at **Snapshot** and pinch (or click) it. The scene is saved into the
+   first empty numbered slot and that slot becomes selected; an empty slot
+   appears dimmed until it holds a snapshot.
+3. To rebuild a saved arrangement, pinch (or click) its number. Panels,
+   positions, sizes, rotations, the selected media, panel settings, and the
+   environment mode all return to the saved state. A slideshow captured in a
+   snapshot always comes back stopped, showing the media that was on screen.
+4. To replace a snapshot, select its number, adjust the scene, then pinch
+   **Snapshot** again. Selecting an empty numbered slot and pressing
+   **Snapshot** fills that slot instead.
+
+You can keep up to eight snapshots. To clear one, press and hold its numbered
+button for about half a second; the slot becomes empty and is available again.
+Snapshots are saved in this browser for the current media home and are restored
+the next time you open the scene on the same device.
 
 ### Choose an environment
 
@@ -369,6 +397,12 @@ Each selected full panel has a set of controls along its top:
   retargeted, or changed independently.
 - **Play** starts or stops a slideshow using the panel's current directory and
   sort order.
+- **Video Play/Pause**, **-15s**, and **+15s** appear only while the panel is
+  showing a video. Video Play/Pause starts or pauses that video, and the two
+  skip buttons move it 15 seconds backwards or forwards without changing whether
+  it is playing. A skip never moves outside the video, so **+15s** near the end
+  jumps to the end and lets the video finish normally. The row re-centers and
+  rescales when these buttons appear or disappear.
 - **Zoom** switches gestures between panel transformation and content
   pan/zoom without locking the panel.
 - **Ratio** cycles the panel frame through **Native**, **1:1**, **4:3**,
@@ -385,10 +419,14 @@ Each selected full panel has a set of controls along its top:
   predefined tags; selected entries show a check mark. Assignments are saved on
   the server and appear when the same media is opened in another panel or
   client. Use Prev/Next for longer definition lists and Close when finished.
+- **Gear** opens the panel's configuration window (**OPTIONS**). Its tag list
+  starts collapsed, and the window can be dragged anywhere while staying attached
+  to its panel.
 
 Pinch the leftmost 25% of a populated panel for the previous item or the
 rightmost 25% for the next item. Navigation wraps around the current directory.
-Pinching the center of a video toggles play/pause.
+Pinching the center of a video toggles play/pause, and the toolbar's
+**Video Play/Pause**, **-15s**, and **+15s** buttons do the same from the top row.
 
 Double tap nearly the same point on a picture to cycle its display mode:
 
@@ -517,6 +555,8 @@ playback controls that are saved with the panel:
   `Off` (stop at the end of ordered playlists).
 
 Normal video selection follows the home-screen **Autoplay videos** preference.
+Playback position is never saved: reloading a page, restoring a snapshot, or
+choosing the same video again starts it from the beginning.
 
 ## 8. Saved layouts
 
@@ -536,6 +576,10 @@ If a saved file has been removed, Souvenir reports it and clears that panel's
 missing selection. Clear the site's browser data to reset all settings and the
 layout.
 
+Scene snapshots (section 4) are stored the same way and are scoped to the same
+media-home identity, so they are restored on the next visit and ignored if the
+media home changes.
+
 ## 9. Desktop preview
 
 Desktop preview is useful for arranging a test layout and checking the server:
@@ -551,15 +595,21 @@ Desktop preview is useful for arranging a test layout and checking the server:
 
 In desktop preview each panel's **OPTIONS** (gear) control opens a standard
 2D window instead of the in-scene options panel used on Quest. The window
-appears near the panel, only for the selected panel, and can be dragged by its
-title bar; its position is kept while the preview stays open but is not saved
-with the layout. Scroll the mouse wheel over the title bar to rescale it; the
-wheel still scrolls the tag list below it. It offers
+appears beside the panel, only for the selected panel, and can be dragged
+anywhere by its title bar. It stays attached to its panel: move the panel and
+the window moves with it, while the window itself never shifts on the panel. The
+dragged placement is kept while the preview stays open but is not saved with the
+layout. Scroll the mouse wheel over the title bar to rescale it, which grows the
+window from its top-left corner; the wheel still scrolls the tag list below it.
+It offers
 the same choices as the Quest options panel: save mode, depth and lighting
-controls, and **Tags**. Close it with the **✕** button or by tapping another
-panel (which fully closes it, so it must be reopened with the gear).
-On Quest the window is the in-scene OPTIONS chrome; pinch it with both
-hands to rescale it (a hardware-only check to confirm in passthrough).
+controls, and **Tags**. The tag list starts collapsed; choose **Tags** to expand
+it and **Tags** again to collapse it. Close it with the **✕** button or by
+tapping another panel (which fully closes it, so it must be reopened with the
+gear).
+On Quest the window is the in-scene OPTIONS chrome; pinch and drag its
+background to move it, or pinch it with both hands to rescale (a hardware-only
+check to confirm in passthrough).
 
 Physical passthrough and optical hand tracking can only be validated on Quest.
 

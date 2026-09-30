@@ -129,8 +129,39 @@ export function makeButton(
   markInteractive(button);
   button.userData.kind = "button";
   button.userData.label = label;
+  button.userData.labelOptions = {
+    width: textureWidth,
+    height: textureHeight,
+    background,
+    foreground,
+    border,
+    font,
+    align,
+    padding,
+    shape,
+    radius,
+    resolutionScale: textureResolutionScale,
+  };
   button.userData.textureSize = texture.userData.canvasSize;
   return button;
+}
+
+/**
+ * Redraws a button's label in place, keeping its geometry, material, and size.
+ * Used by controls whose glyph encodes live state (for example play/pause).
+ * Returns true when the texture was replaced.
+ */
+export function setButtonLabel(button, label) {
+  const options = button?.userData?.labelOptions;
+  if (!button?.material || !options || button.userData.label === label) return false;
+  const texture = makeLabelTexture(label, options);
+  const previous = button.material.map;
+  button.material.map = texture;
+  button.material.needsUpdate = true;
+  button.userData.label = label;
+  button.userData.textureSize = texture.userData.canvasSize;
+  previous?.dispose();
+  return true;
 }
 
 export function setButtonState(button, { active = false, hovered = false } = {}) {

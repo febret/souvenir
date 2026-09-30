@@ -10,6 +10,7 @@ import {
   SLIDESHOW_MODE_DEFINITIONS,
   clampOptionsScale,
 } from "./panel-options/constants.js";
+import { optionsWindowPosition } from "../core/options-window.js";
 
 const BASE_CLASS = "scene-options-window";
 const DEPTH_MIN = 0;
@@ -22,8 +23,12 @@ function clampNumber(value, min, max) {
 /**
  * 2D overlay window used in Desktop Preview to replace the in-scene OPTIONS
  * chrome for the focused panel. It mirrors the same sections, actions, and
- * control states as `PanelOptionsView` but renders as a draggable DOM window
- * that always floats above the WebGL canvas and 3D media panels.
+ * control states as `PanelOptionsView` but renders as a DOM window that always
+ * floats above the WebGL canvas and 3D media panels.
+ *
+ * The window belongs to its panel: it stores an offset from the panel's
+ * projected center, which the owner supplies every frame. Dragging the title bar
+ * changes only that offset, so moving the panel carries the window along.
  */
 export class PanelOptionsWindow {
   constructor({ panelId, host, onAction, onAdmSetting }) {
@@ -34,7 +39,8 @@ export class PanelOptionsWindow {
     this.signature = "";
     this.slideshowSyncSignature = "";
     this.controlState = null;
-    this.position = null;
+    this.anchor = { x: 0, y: 0 };
+    this.offset = { x: 0, y: 0 };
     this.scale = 1;
     this.depthInput = null;
     this.depthOutput = null;
@@ -83,26 +89,7 @@ export class PanelOptionsWindow {
 
   #attachDrag() {
     const handle = this.titlebar;
-    const root = this.element;
     let drag = null;
-
-    const hostRect = () => this.host?.getBoundingClientRect() ?? {
-      left: 0,
-      top: 0,
-      width: window.innerWidth,
-      height: window.innerHeight,
-    };
-
-    const currentLeft = () => {
-      const px = parseFloat(root.style.left);
-      if (Number.isFinite(px)) return px;
-      return root.getBoundingClientRect().left - hostRect().left;
-    };
-    const currentTop = () => {
-      const px = parseFloat(root.style.top);
-      if (Number.isFinite(px)) return px;
-      return root.getBoundingClientRect().top - hostRect().top;
-    };
 
     handle.addEventListener("pointerdown", (event) => {
       if (event.target.closest("button")) return;
@@ -111,30 +98,18 @@ export class PanelOptionsWindow {
         pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
-        originX: currentLeft(),
-        originY: currentTop(),
+        originX: this.offset.x,
+        originY: this.offset.y,
       };
       handle.setPointerCapture(event.pointerId);
     });
 
     handle.addEventListener("pointermove", (event) => {
       if (!drag || event.pointerId !== drag.pointerId) return;
-      const rect = hostRect();
-      const width = root.offsetWidth || 320;
-      const height = root.offsetHeight || 240;
-      const x = clampNumber(
-        drag.originX + event.clientX - drag.startX,
-        8,
-        Math.max(8, rect.width - width - 8),
-      );
-      const y = clampNumber(
-        drag.originY + event.clientY - drag.startY,
-        8,
-        Math.max(8, rect.height - height - 8),
-      );
-      root.style.left = `${x}px`;
-      root.style.top = `${y}px`;
-      this.position = { x, y };
+      this.moveTo({
+        x: drag.originX + event.clientX - drag.startX,
+        y: drag.originY + event.clientY - drag.startY,
+      });
     });
 
     handle.addEventListener("pointerup", (event) => {
@@ -161,6 +136,7 @@ export class PanelOptionsWindow {
         event.stopPropagation();
         this.scale = clampOptionsScale(this.scale * Math.exp(-event.deltaY * 0.001));
         root.style.transform = `scale(${this.scale})`;
+        this.#place();
       },
       { passive: false },
     );
@@ -171,23 +147,44 @@ export class PanelOptionsWindow {
     this.element.hidden = !visible;
   }
 
-  setPosition({ x, y }) {
-    this.position = { x, y };
-    this.element.style.left = `${Math.round(x)}px`;
-    this.element.style.top = `${Math.round(y)}px`;
+  /** Re-anchors the window to its panel; the stored offset is what the user set. */
+  follow(anchor) {
+    this.anchor = { x: Number(anchor?.x) || 0, y: Number(anchor?.y) || 0 };
+    this.#place();
   }
 
-  setPositionIfUnset(position) {
-    if (this.position) return;
-    if (position) {
-      this.setPosition(position);
-    } else {
-      this.position = { x: null, y: null };
-    }
+  /** Drags the window freely by changing its offset from the panel. */
+  moveTo(offset) {
+    this.offset = {
+      x: Number.isFinite(offset?.x) ? offset.x : this.offset.x,
+      y: Number.isFinite(offset?.y) ? offset.y : this.offset.y,
+    };
+    this.#place();
   }
 
-  getPosition() {
-    return this.position ? { ...this.position } : null;
+  getOffset() {
+    return { ...this.offset };
+  }
+
+  #place() {
+    const root = this.element;
+    const rect = this.host?.getBoundingClientRect() ?? {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    };
+    const position = optionsWindowPosition({
+      anchor: this.anchor,
+      offset: this.offset,
+      host: rect,
+      // The scale grows from the top-left corner, so the scaled size is what
+      // has to stay reachable.
+      size: {
+        width: root.offsetWidth * this.scale,
+        height: root.offsetHeight * this.scale,
+      },
+    });
+    root.style.left = `${position.x}px`;
+    root.style.top = `${position.y}px`;
   }
 
   sync({
